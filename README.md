@@ -10,7 +10,7 @@
 - **4 种协议互相转换**：Anthropic Messages、OpenAI Chat Completions、OpenAI Responses、Gemini。Claude Code 可以用 DeepSeek，Codex 可以用 Claude，Gemini CLI 可以用内部服务。流式输出、工具调用、思考过程、图片都会正确转换。
 - **每个端点走不同的线路**：直连、跟随系统代理、HTTP 代理、SOCKS5 代理，可以按端点设置，也可以按规则覆盖。
 - **可配置的故障切换**：每个端点（或每个模型）可以设置「出错时依次改用哪些模型」；触发条件（连接失败、超时、5xx、429、其他状态码）也可以配置。只在上游还没开始返回内容时切换，不会把输出了一半的回答重来一遍。
-- **插件**：内部服务的特殊鉴权（浏览器 SSO、账号密码、验证码、动态 token）、请求和响应改写，写成 Rust 插件编译进 App。网关负责凭证缓存、过期刷新、401 后自动重新登录并重试。
+- **插件 = 一种端点类型**：比如「公司内部服务」，和 Anthropic、OpenAI 并列可选。插件声明内部服务说的标准格式（比如 OpenAI Chat），协议转换由框架完成；插件只写登录（网页登录、账号密码、动态 token）、续期和内部格式的小差异。App 启动时自动登录、到期前后台续期、401 后自动重新登录并重试。
 - **请求日志**：每个请求的客户端原始请求、发给上游的请求、上游原始响应、返回客户端的响应都能看到（密钥自动打码），可以一键复制成 curl 重放。完整内容默认保留 24 小时。
 - **用量统计**：按模型、按端点统计请求数、token、费用、耗时、失败率。
 - **一键获取模型和价格**：从上游的 `/models` 接口拉取模型列表，勾选添加；价格、上下文窗口、是否支持图片从 [LiteLLM 公开价格表](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) 自动填写（内部模型查不到的手动填）。
@@ -76,7 +76,7 @@ npm run test:core
 
 ## 写插件
 
-见 [docs/PLUGINS.md](docs/PLUGINS.md)。简单来说：在 `src-tauri/core/src/plugins/` 下新建一个文件，实现 `Plugin` trait，在 `plugins/mod.rs` 里注册一行，重新构建 App。`plugins/example.rs` 是一个完整的示例（浏览器 SSO、账号密码 + 验证码、token 刷新、改写请求和响应）。
+见 [docs/PLUGINS.md](docs/PLUGINS.md)。简单来说：复制 `src-tauri/core/src/plugins/example.rs`（OpenAI Chat 格式 + 网页登录 + 自动续期），改成你们的逻辑，在 `plugins/mod.rs` 里注册一行，重新构建 App。
 
 ## 项目结构
 

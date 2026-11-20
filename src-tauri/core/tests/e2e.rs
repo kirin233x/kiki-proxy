@@ -384,3 +384,27 @@ async fn context_1m_and_overflow() {
     let ids = env.gateway.list_upstream_models("an").await.unwrap();
     assert_eq!(ids, vec!["claude-a", "claude-b"]);
 }
+
+#[tokio::test]
+async fn stepwise_test_report() {
+    let env = setup().await;
+    let r = env.gateway.test_endpoint_report("oa").await;
+    let kinds: Vec<(&str, &str)> = r.steps.iter().map(|s| (s.kind.as_str(), s.status.as_str())).collect();
+    assert_eq!(kinds, vec![("network", "ok"), ("auth", "skip"), ("model", "ok")], "{:?}", r.steps);
+    assert!(r.ok);
+    assert!(r.steps[2].detail.contains("Hello"));
+
+    // 插件端点：登录这一步会真的去登录
+    let r = env.gateway.test_endpoint_report("corp").await;
+    assert_eq!(r.steps[1].label, "登录");
+    assert_eq!(r.steps[1].status, "ok", "{:?}", r.steps);
+
+    // 上游不可达：停在网络这一步
+    let mut cfg = (*env.gateway.config()).clone();
+    cfg.endpoints.push(EndpointConfig { ..endpoint("dead", Protocol::OpenaiChat, "http://127.0.0.1:1".into(), "x") });
+    env.gateway.save_config(cfg).await.unwrap();
+    let r = env.gateway.test_endpoint_report("dead").await;
+    assert_eq!(r.steps.len(), 1);
+    assert_eq!(r.steps[0].status, "fail");
+    assert!(!r.ok);
+}

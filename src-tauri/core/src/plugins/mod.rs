@@ -1,18 +1,22 @@
 //! 编译进 App 的插件都在这个目录里。
 //!
-//! # 写一个新插件
+//! # 插件是什么
 //!
-//! 1. 在这个目录新建一个文件，比如 `corp.rs`，参考 `example.rs` 实现 [`Plugin`] trait。
-//!    只需要实现你关心的方法，其余的都有默认实现：
-//!    - 特殊鉴权：`uses_login` 返回 true，实现 `login`（可选 `refresh`、`apply_credential`、`is_auth_failure`）
-//!    - 改请求：`on_request`（URL、请求头、请求体都能改）
-//!    - 改响应：`on_response`（非流式）、`on_stream_event`（流式，逐个 SSE 事件）
-//!    - 需要用户填的东西：`settings`（会出现在端点编辑页里，Secret 类型的存进钥匙串）
-//! 2. 在下面加一行 `mod corp;`，并在 [`registry`] 里加一行 `Arc::new(corp::Corp)`。
-//! 3. 重新构建 App（`npm run tauri build`），在端点设置里选择这个插件即可。
+//! 一个插件就是一种「端点类型」，比如「公司内部服务」。在 App 里新建端点时，它和 Anthropic、
+//! OpenAI 并列出现在「类型」里，选了以后就是一个普通端点：照常配模型、出口代理、故障切换。
 //!
-//! 网关已经帮你处理好：协议转换、出口代理、故障切换、日志、凭证缓存与过期刷新、
-//! 401 后自动重新登录并重试。插件只需要关心「这个上游和标准 API 哪里不一样」。
+//! 插件只关心两件事：
+//! - **登录状态**：`login`（网页登录 / 账号密码 / 调本机命令……）、`refresh`（续期）。
+//!   网关负责把凭证存进钥匙串、App 启动时自动登录、到期前后台续期、遇到 401 重新登录并重试。
+//! - **内部格式和标准格式不一样的地方**：`protocol()` 声明内部服务说哪种标准格式（默认 OpenAI Chat），
+//!   网关会把任何客户端的请求转换成这种格式；剩下的小差异在 `on_request` / `on_response` /
+//!   `on_stream_event` 里改。
+//!
+//! # 新增一个插件
+//!
+//! 1. 复制 `example.rs` 为 `corp.rs`，改成你们的真实逻辑。
+//! 2. 在下面加 `mod corp;`，并在 [`registry`] 里加 `Arc::new(corp::Corp)`。
+//! 3. 重新构建 App（`npm run tauri build`），新建端点时类型选你的插件。
 
 use crate::plugin::Plugin;
 use std::sync::Arc;
@@ -22,7 +26,7 @@ mod example;
 /// 所有可用的插件
 pub fn registry() -> Vec<Arc<dyn Plugin>> {
     vec![
-        Arc::new(example::ExampleSso),
+        Arc::new(example::CorpExample),
         // 在这里注册你的插件，例如：
         // Arc::new(corp::Corp),
     ]

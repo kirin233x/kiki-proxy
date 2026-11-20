@@ -1,18 +1,34 @@
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowRight, ArrowUp, Plus, Route as RouteIcon, Save, Trash2, Wand2 } from "lucide-react";
-import { api, Config, Protocol, PROTOCOLS, protocolLabel, RouteHop, RuleConfig, uid } from "../api";
+import { ArrowDown, ArrowUp, Plus, Save, Trash2, Wand2 } from "lucide-react";
+import { api, Config, Protocol, PROTOCOLS, RouteHop, RuleConfig, uid } from "../api";
 import { useApp } from "../App";
-import ModelInput from "../components/ModelInput";
-import { Empty, Field, Switch, useToast } from "../components/ui";
-import { protocolColor } from "../utils";
+import ModelInput, { ModelChain } from "../components/ModelInput";
+import { Switch, useToast } from "../components/ui";
 
 export default function Routing() {
-  const { config, saveConfig } = useApp();
+  const { config, saveConfig, go, plugins } = useApp();
   const toast = useToast();
   const [draft, setDraft] = useState<Config>(() => structuredClone(config));
   const dirty = JSON.stringify(draft) !== JSON.stringify(config);
   useEffect(() => setDraft(structuredClone(config)), [config]);
 
+  const proxyName = (p: string) => (p === "direct" ? "直连" : p === "system" || !p ? "系统代理" : draft.proxies.find((x) => x.id === p)?.name ?? p);
+  const find = (id: string) => {
+    const [prefix, name] = id.split("/");
+    const ep = draft.endpoints.find((e) => e.id === prefix);
+    return { ep, m: ep?.models.find((m) => m.name === name) };
+  };
+  /** 一个模型实际的备选链：模型自己设置了就用模型的，否则用端点的 */
+  const chainOf = (id: string) => {
+    const { ep, m } = find(id);
+    if (!ep) return [];
+    return m?.fallbacks.length ? m.fallbacks : ep.fallbacks;
+  };
+  const setChain = (epId: string, name: string, list: string[]) =>
+    setDraft((d) => ({
+      ...d,
+      endpoints: d.endpoints.map((e) => (e.id !== epId ? e : { ...e, models: e.models.map((m) => (m.name === name ? { ...m, fallbacks: list } : m)) })),
+    }));
   const setRule = (i: number, patch: Partial<RuleConfig>) => setDraft((d) => ({ ...d, rules: d.rules.map((r, j) => (j === i ? { ...r, ...patch } : r)) }));
   const move = (i: number, dir: -1 | 1) =>
     setDraft((d) => {
@@ -23,209 +39,169 @@ export default function Routing() {
       return { ...d, rules };
     });
 
-  const save = () => saveConfig(draft).then(() => toast("已保存"));
+  /** 「发到」那一列：端点名 · 出口 */
+  const dest = (target: string, proxyOverride = "") => {
+    if (!target) return <span className="muted-sm">未设置</span>;
+    const prefix = target.split("/")[0];
+    const ep = draft.endpoints.find((e) => e.id === prefix);
+    if (!ep) return <span className="dest-bad">找不到端点「{prefix}」</span>;
+    const typeName = plugins.find((p) => p.id === ep.plugin)?.name;
+    return (
+      <span className="dest">
+        <b>{ep.name}</b>
+        <span>
+          {typeName ? `${typeName} · ` : ""}
+          {proxyName(proxyOverride || ep.proxy)}
+          {!ep.enabled && " · 已停用"}
+        </span>
+      </span>
+    );
+  };
+  const chainText = (target: string) => {
+    const c = target.endsWith("/*") ? [] : chainOf(target);
+    return c.length ? <span className="chain-ro">{c.map((x, i) => <code key={x}>{i + 1}. {x}</code>)}</span> : <span className="muted-sm">—</span>;
+  };
 
   return (
     <div className="page">
-      <div className="page-inner" style={{ maxWidth: 980 }}>
+      <div className="page-inner" style={{ maxWidth: 1100 }}>
         <div className="page-header">
           <div>
             <h1 className="page-title">路由与切换</h1>
-            <div className="page-subtitle">决定每个请求发到哪个端点、走哪条线路、失败时换到哪里</div>
+            <div className="page-subtitle">客户端发来一个模型名，发到哪里、失败时换到哪里，一张表看清楚</div>
           </div>
           <div className="header-actions">
-            <button className="btn btn-primary" onClick={save} disabled={!dirty}>
+            <button className="btn btn-primary" onClick={() => saveConfig(draft).then(() => toast("已保存"))} disabled={!dirty}>
               <Save size={16} />
               保存
             </button>
           </div>
         </div>
 
-        <div className="flow">
-          <div className="flow-step">
-            <b>1</b>
-            <span>
-              按顺序匹配<strong>规则</strong>
-            </span>
-          </div>
-          <ArrowRight size={16} />
-          <div className="flow-step">
-            <b>2</b>
-            <span>
-              模型名带<strong>端点前缀</strong>就直接用
-            </span>
-          </div>
-          <ArrowRight size={16} />
-          <div className="flow-step">
-            <b>3</b>
-            <span>
-              都不匹配用<strong>默认模型</strong>
-            </span>
-          </div>
-          <ArrowRight size={16} />
-          <div className="flow-step">
-            <b>4</b>
-            <span>
-              失败时按<strong>备选模型</strong>切换
-            </span>
-          </div>
-        </div>
-
         <RouteTester />
 
-        {/* ---------------------------------------------------------------- 规则 */}
-        <div className="settings-group">
-          <h3>
-            规则
-            <span className="h3-hint">适合处理客户端写死的模型名，比如 Claude Code 后台任务用的 haiku</span>
-          </h3>
-          <div className="panel">
-            {draft.rules.length === 0 ? (
-              <Empty icon={<RouteIcon size={22} />} title="没有规则">
-                不加规则也能用：客户端直接写「前缀/模型名」即可
-              </Empty>
-            ) : (
-              <div className="rules">
-                <div className="rule-row rule-head">
-                  <span />
-                  <span>匹配模型名</span>
-                  <span>客户端</span>
-                  <span />
-                  <span>改用模型</span>
-                  <span>出口</span>
-                  <span />
+        <div className="panel route-table">
+          <div className="rt-row rt-head">
+            <span>客户端发来的模型名</span>
+            <span>发到</span>
+            <span>失败时依次换到</span>
+          </div>
+
+          {/* ---------------------------------------------------------------- 规则 */}
+          <div className="rt-group">
+            <b>规则</b>
+            <span>最先匹配，适合客户端写死的模型名（比如 Claude Code 后台任务用的 haiku）。通配符 * 和 ?</span>
+          </div>
+          {draft.rules.map((r, i) => (
+            <div key={r.id} className={`rt-row rule ${r.enabled ? "" : "off"}`}>
+              <div className="rt-cell">
+                <div className="rule-line">
+                  <Switch on={r.enabled} onChange={(v) => setRule(i, { enabled: v })} />
+                  <input className="input mono" value={r.pattern} placeholder="claude-*haiku*" onChange={(e) => setRule(i, { pattern: e.target.value.trim() })} />
                 </div>
-                {draft.rules.map((r, i) => (
-                  <div key={r.id} className={`rule-row ${r.enabled ? "" : "off"}`}>
-                    <Switch on={r.enabled} onChange={(v) => setRule(i, { enabled: v })} />
-                    <div>
-                      <input className="input mono" value={r.pattern} placeholder="claude-*haiku*" onChange={(e) => setRule(i, { pattern: e.target.value.trim() })} />
-                      <input className="input rule-name" value={r.name} placeholder="规则说明（可选）" onChange={(e) => setRule(i, { name: e.target.value })} />
-                    </div>
-                    <select className="select" value={r.client ?? ""} onChange={(e) => setRule(i, { client: (e.target.value || null) as Protocol | null })}>
-                      <option value="">全部</option>
-                      {PROTOCOLS.map((p) => (
-                        <option key={p.value} value={p.value}>
-                          {p.label}
-                        </option>
-                      ))}
-                    </select>
-                    <ArrowRight size={16} className="rule-arrow" />
-                    <ModelInput value={r.target} onChange={(v) => setRule(i, { target: v })} placeholder="不改模型" extra={draft.endpoints.map((e) => `${e.id}/*`)} />
-                    <select className="select" value={r.proxy} onChange={(e) => setRule(i, { proxy: e.target.value })}>
-                      <option value="">端点默认</option>
-                      <option value="direct">直连</option>
-                      <option value="system">系统代理</option>
-                      {draft.proxies.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </select>
-                    <div className="rule-actions">
-                      <button className="icon-btn" disabled={i === 0} onClick={() => move(i, -1)}>
-                        <ArrowUp size={14} />
-                      </button>
-                      <button className="icon-btn" disabled={i === draft.rules.length - 1} onClick={() => move(i, 1)}>
-                        <ArrowDown size={14} />
-                      </button>
-                      <button className="icon-btn" onClick={() => setDraft((d) => ({ ...d, rules: d.rules.filter((_, j) => j !== i) }))}>
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                <div className="rule-line sub">
+                  <select className="select" value={r.client ?? ""} onChange={(e) => setRule(i, { client: (e.target.value || null) as Protocol | null })}>
+                    <option value="">所有客户端</option>
+                    {PROTOCOLS.map((p) => (
+                      <option key={p.value} value={p.value}>
+                        仅 {p.label}
+                      </option>
+                    ))}
+                  </select>
+                  <input className="input" value={r.name} placeholder="备注" onChange={(e) => setRule(i, { name: e.target.value })} />
+                </div>
               </div>
+              <div className="rt-cell">
+                <ModelInput value={r.target} onChange={(v) => setRule(i, { target: v })} placeholder="改用哪个模型" extra={draft.endpoints.map((e) => `${e.id}/*`)} />
+                <div className="rule-line sub">
+                  {dest(r.target, r.proxy)}
+                  <select className="select mini" value={r.proxy} onChange={(e) => setRule(i, { proxy: e.target.value })} title="出口（可覆盖端点的设置）">
+                    <option value="">端点的出口</option>
+                    <option value="direct">直连</option>
+                    <option value="system">系统代理</option>
+                    {draft.proxies.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="rt-cell rt-chain">
+                {chainText(r.target)}
+                <div className="rule-actions">
+                  <button className="icon-btn" disabled={i === 0} onClick={() => move(i, -1)} title="上移">
+                    <ArrowUp size={14} />
+                  </button>
+                  <button className="icon-btn" disabled={i === draft.rules.length - 1} onClick={() => move(i, 1)} title="下移">
+                    <ArrowDown size={14} />
+                  </button>
+                  <button className="icon-btn" onClick={() => setDraft((d) => ({ ...d, rules: d.rules.filter((_, j) => j !== i) }))} title="删除">
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+          <div className="rt-add">
+            <button
+              className="chain-add"
+              onClick={() => setDraft((d) => ({ ...d, rules: [...d.rules, { id: uid("r"), name: "", enabled: true, pattern: "", client: null, target: "", proxy: "" }] }))}
+            >
+              <Plus size={14} />
+              添加规则
+            </button>
+          </div>
+
+          {/* ---------------------------------------------------------------- 端点模型 */}
+          <div className="rt-group">
+            <b>端点模型</b>
+            <span>
+              「前缀/模型名」直接发到对应端点。备选在这里或端点编辑页设置，切换条件在
+              <a onClick={() => go({ name: "settings" })}>设置</a>里
+            </span>
+          </div>
+          {draft.endpoints
+            .filter((e) => e.enabled)
+            .flatMap((e) =>
+              e.models
+                .filter((m) => m.enabled)
+                .map((m) => {
+                  const id = `${e.id}/${m.name}`;
+                  const inherited = !m.fallbacks.length && e.fallbacks.length > 0;
+                  return (
+                    <div key={id} className="rt-row">
+                      <div className="rt-cell">
+                        <code className="rt-model">{id}</code>
+                        {m.displayName && <span className="muted-sm">{m.displayName}</span>}
+                      </div>
+                      <div className="rt-cell">
+                        {dest(id)}
+                        {m.upstream && m.upstream !== m.name && <span className="muted-sm">上游模型 {m.upstream}</span>}
+                      </div>
+                      <div className="rt-cell rt-chain">
+                        <ModelChain value={chainOf(id)} onChange={(v) => setChain(e.id, m.name, v)} exclude={[id]} />
+                        {inherited && <span className="inherit">沿用端点「{e.name}」的设置，改动后只对这个模型生效</span>}
+                      </div>
+                    </div>
+                  );
+                }),
             )}
-            <div className="table-foot">
-              <button
-                className="btn btn-sm btn-soft"
-                onClick={() =>
-                  setDraft((d) => ({ ...d, rules: [...d.rules, { id: uid("r"), name: "", enabled: true, pattern: "", client: null, target: "", proxy: "" }] }))
-                }
-              >
-                <Plus size={14} />
-                添加规则
-              </button>
-              <span className="muted-sm">
-                通配符：<code>*</code> 任意字符，<code>?</code> 单个字符；目标写 <code>ds/*</code> 表示换到 ds 端点、模型名不变
-              </span>
-            </div>
-          </div>
-        </div>
 
-        {/* ---------------------------------------------------------------- 默认 */}
-        <div className="settings-group">
-          <h3>默认模型</h3>
-          <div className="panel">
-            <div className="setting-row">
-              <div className="setting-text">
-                <b>兜底模型</b>
-                <span>模型名既没有前缀也不匹配任何规则时使用（例如 Claude Code 默认发的 claude-sonnet-4-5）</span>
-              </div>
-              <div style={{ width: 300 }}>
-                <ModelInput value={draft.routing.defaultModel} onChange={(v) => setDraft({ ...draft, routing: { ...draft.routing, defaultModel: v } })} placeholder="不设置则返回 404" />
-              </div>
-            </div>
-            <div className="setting-row">
-              <div className="setting-text">
-                <b>让 Claude Code 的 /model 列出所有模型</b>
-                <span>
-                  Claude Code 只显示名字含 claude 的模型，开启后其他模型会以 <code>claude@前缀/模型</code> 的名字出现，网关会自动去掉这个前缀
-                </span>
-              </div>
-              <Switch on={draft.routing.claudeAlias} onChange={(v) => setDraft({ ...draft, routing: { ...draft.routing, claudeAlias: v } })} />
-            </div>
+          {/* ---------------------------------------------------------------- 兜底 */}
+          <div className="rt-group">
+            <b>兜底</b>
+            <span>既没有前缀、也不匹配任何规则的模型名（比如 Claude Code 默认的 claude-sonnet-4-5）</span>
           </div>
-        </div>
-
-        {/* ---------------------------------------------------------------- 故障切换 */}
-        <div className="settings-group">
-          <h3>
-            故障切换的触发条件
-            <span className="h3-hint">只在上游还没开始返回内容时切换，已经输出一半的流不会被打断重来</span>
-          </h3>
-          <div className="panel">
-            {(
-              [
-                ["onConnectError", "连接失败", "DNS 解析失败、连接被拒、代理不可用、TLS 错误、插件登录失败"],
-                ["onTimeout", "首字节超时", "超过端点设置的等待时间仍没有响应"],
-                ["on5xx", "上游 5xx", "服务端错误、过载（500 / 502 / 503 / 529 等）"],
-                ["on429", "上游 429", "被限流"],
-              ] as const
-            ).map(([k, title, desc]) => (
-              <div key={k} className="setting-row">
-                <div className="setting-text">
-                  <b>{title}</b>
-                  <span>{desc}</span>
-                </div>
-                <Switch on={draft.failover[k]} onChange={(v) => setDraft({ ...draft, failover: { ...draft.failover, [k]: v } })} />
-              </div>
-            ))}
-            <div className="setting-row">
-              <div className="setting-text">
-                <b>其他状态码</b>
-                <span>额外触发切换的状态码，逗号分隔，例如 401, 403</span>
-              </div>
-              <input
-                className="input mono"
-                style={{ width: 200 }}
-                defaultValue={draft.failover.extraStatus.join(", ")}
-                placeholder="例如 403"
-                onBlur={(e) =>
-                  setDraft({
-                    ...draft,
-                    failover: {
-                      ...draft.failover,
-                      extraStatus: e.target.value
-                        .split(/[,，\s]+/)
-                        .map(Number)
-                        .filter((n) => n >= 100 && n < 600),
-                    },
-                  })
-                }
-              />
+          <div className="rt-row">
+            <div className="rt-cell">
+              <span className="rt-model other">其他所有模型名</span>
             </div>
+            <div className="rt-cell">
+              <ModelInput value={draft.routing.defaultModel} onChange={(v) => setDraft({ ...draft, routing: { ...draft.routing, defaultModel: v } })} placeholder="不设置则返回「找不到模型」" />
+              {draft.routing.defaultModel && <div className="rule-line sub">{dest(draft.routing.defaultModel)}</div>}
+            </div>
+            <div className="rt-cell rt-chain">{draft.routing.defaultModel ? chainText(draft.routing.defaultModel) : <span className="muted-sm">—</span>}</div>
           </div>
         </div>
       </div>
@@ -234,13 +210,15 @@ export default function Routing() {
 }
 
 function RouteTester() {
-  const [model, setModel] = useState("claude-haiku-4-5");
+  const [model, setModel] = useState("");
   const [client, setClient] = useState<Protocol>("anthropic");
   const [hops, setHops] = useState<RouteHop[] | null>(null);
   const [error, setError] = useState("");
   const { config } = useApp();
+  const proxyName = (p: string) => (p === "direct" ? "直连" : p === "system" || !p ? "系统代理" : config.proxies.find((x) => x.id === p)?.name ?? p);
 
   const run = async () => {
+    if (!model) return;
     setError("");
     try {
       setHops(await api.explainRoute(model, client));
@@ -249,52 +227,40 @@ function RouteTester() {
       setError(String(e));
     }
   };
-  useEffect(() => {
-    run();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config]);
-
-  const proxyName = (p: string) => (p === "direct" ? "直连" : p === "system" || !p ? "系统代理" : config.proxies.find((x) => x.id === p)?.name ?? p);
 
   return (
-    <div className="panel panel-pad tester">
-      <div className="panel-title">
-        <Wand2 size={16} />
-        路由测试
+    <div className="tester2">
+      <Wand2 size={16} />
+      <span>试一试：</span>
+      <select className="select" value={client} onChange={(e) => setClient(e.target.value as Protocol)}>
+        {PROTOCOLS.map((p) => (
+          <option key={p.value} value={p.value}>
+            {p.label} 客户端
+          </option>
+        ))}
+      </select>
+      <span>发来</span>
+      <div style={{ flex: 1 }}>
+        <ModelInput value={model} onChange={setModel} placeholder="输入模型名，比如 claude-haiku-4-5" />
       </div>
-      <div className="panel-sub">输入一个模型名，看看它会被发到哪里（已保存的配置）</div>
-      <div className="tester-form">
-        <Field label="客户端">
-          <select className="select" value={client} onChange={(e) => setClient(e.target.value as Protocol)}>
-            {PROTOCOLS.map((p) => (
-              <option key={p.value} value={p.value}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="请求的模型名">
-          <ModelInput value={model} onChange={setModel} placeholder="claude-sonnet-4-5" />
-        </Field>
-        <button className="btn btn-primary" onClick={run}>
-          测试
-        </button>
-      </div>
-      {error && <div className="banner err">{error}</div>}
-      {hops && (
-        <div className="hops">
-          {hops.map((h, i) => (
-            <div key={i} className="hop">
-              <span className="hop-n">{i === 0 ? "首选" : `备选 ${i}`}</span>
-              <span className="proto-tag" style={{ ["--c" as string]: protocolColor[h.protocol], ["--cb" as string]: protocolColor[h.protocol] + "1f" }}>
-                {protocolLabel(h.protocol)}
+      <button className="btn btn-sm btn-primary" onClick={run} disabled={!model}>
+        看看去哪
+      </button>
+      {(hops || error) && (
+        <div className="tester2-result">
+          {error ? (
+            <span className="dest-bad">{error}</span>
+          ) : (
+            hops!.map((h, i) => (
+              <span key={i} className="hop2">
+                {i > 0 && <em>失败时 →</em>}
+                <b>{h.endpointName}</b>
+                <code>{h.upstreamModel}</code>
+                <span>经{proxyName(h.proxy)}</span>
+                {i === 0 && h.rule && <span className="tag accent">{h.rule}</span>}
               </span>
-              <b>{h.endpointName}</b>
-              <code>{h.upstreamModel}</code>
-              <span className="muted-sm">经 {proxyName(h.proxy)}</span>
-              {h.rule && i === 0 && <span className="tag accent">{h.rule}</span>}
-            </div>
-          ))}
+            ))
+          )}
         </div>
       )}
     </div>

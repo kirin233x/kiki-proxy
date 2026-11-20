@@ -6,7 +6,7 @@ import { CopyButton, Empty, StatusDot } from "../components/ui";
 import { fmtCost, fmtMs, fmtNum, fmtTime, protocolColor, statusTone } from "../utils";
 
 export default function Overview() {
-  const { config, status, go, baseUrl } = useApp();
+  const { config, status, go, baseUrl, plugins } = useApp();
   const [stats, setStats] = useState<Stats | null>(null);
   const [recent, setRecent] = useState<LogRecord[]>([]);
   const [health, setHealth] = useState<Record<string, TestResult | "busy">>({});
@@ -28,7 +28,15 @@ export default function Overview() {
       .filter((e) => e.enabled)
       .forEach((e) => {
         setHealth((h) => ({ ...h, [e.id]: "busy" }));
-        api.testEndpoint(e.id).then((r) => setHealth((h) => ({ ...h, [e.id]: r })));
+        api.testEndpointReport(e.id).then((r) => {
+          // 汇总分步测试：全部通过显示第一个模型的耗时，否则显示卡住的那一步
+          const fail = r.steps.find((x) => x.status === "fail");
+          const first = r.steps.find((x) => x.kind === "model");
+          const res: TestResult = fail
+            ? { ok: false, status: 0, latencyMs: fail.ms, message: `${fail.kind === "model" ? `模型 ${fail.label}` : fail.label}：${fail.detail}` }
+            : { ok: true, status: 200, latencyMs: first?.ms ?? 0, message: "全部通过" };
+          setHealth((h) => ({ ...h, [e.id]: res }));
+        });
       });
   };
 
@@ -149,14 +157,14 @@ export default function Overview() {
               <button key={e.id} className={`ep-card ${e.enabled ? "" : "off"}`} onClick={() => go({ name: "endpoint", id: e.id })}>
                 <div className="ep-card-top">
                   <span className="proto-tag" style={{ ["--c" as string]: protocolColor[e.protocol], ["--cb" as string]: protocolColor[e.protocol] + "1f" }}>
-                    {protocolLabel(e.protocol)}
+                    {plugins.find((p) => p.id === e.plugin)?.name ?? protocolLabel(e.protocol)}
                   </span>
                   {h === "busy" ? (
                     <StatusDot tone="busy" />
                   ) : h ? (
                     <span className={`health ${h.ok ? "ok" : "err"}`} title={h.message}>
                       <StatusDot tone={h.ok ? "ok" : "err"} />
-                      {h.ok ? fmtMs(h.latencyMs) : h.status || "失败"}
+                      {h.ok ? fmtMs(h.latencyMs) : "失败"}
                     </span>
                   ) : !e.enabled ? (
                     <span className="muted-sm">已停用</span>
@@ -172,7 +180,6 @@ export default function Overview() {
                     <Radio size={12} />
                     {proxyName}
                   </span>
-                  {e.plugin && <span className="plugin-tag">插件</span>}
                   {e.fallbacks.length > 0 && <span>↪ {e.fallbacks.length} 个备选</span>}
                 </div>
               </button>

@@ -12,7 +12,7 @@ const DESC: Record<ClientInfo["id"], string> = {
 };
 
 export default function Clients() {
-  const { config, baseUrl } = useApp();
+  const { config, baseUrl, saveConfig } = useApp();
   const toast = useToast();
   const [clients, setClients] = useState<ClientInfo[]>([]);
   const [opts, setOpts] = useState<Record<string, ApplyOptions>>({});
@@ -134,6 +134,16 @@ export default function Clients() {
                       <div>
                         <b>在 /model 里列出网关的所有模型</b>
                         <span>设置 CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1，Claude Code 会从网关拉取模型列表</span>
+                      </div>
+                    </div>
+                    <div className="setting-inline span-2" style={{ marginTop: 8 }}>
+                      <Switch
+                        on={config.routing.claudeAlias}
+                        onChange={(v) => saveConfig({ ...config, routing: { ...config.routing, claudeAlias: v } }).catch(() => {})}
+                      />
+                      <div>
+                        <b>列表里也显示非 Claude 模型</b>
+                        <span>Claude Code 只显示名字含 claude 的模型；开启后其他模型显示为 claude@前缀/模型，网关会自动去掉这个前缀（立即生效，不用重新接入）</span>
                       </div>
                     </div>
                   </>

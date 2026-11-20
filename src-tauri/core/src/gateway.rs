@@ -46,6 +46,44 @@ pub struct PluginInfo {
     pub description: String,
     pub settings: Vec<SettingField>,
     pub uses_login: bool,
+    /// 内部服务的接口格式
+    pub protocol: Protocol,
+    pub default_base_url: String,
+}
+
+/// 分步测试的一步
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestStep {
+    /// network / auth / model
+    pub kind: String,
+    pub label: String,
+    /// ok / fail / skip
+    pub status: String,
+    pub detail: String,
+    pub ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestReport {
+    pub ok: bool,
+    pub steps: Vec<TestStep>,
+}
+
+impl TestStep {
+    fn new(kind: &str, label: &str, status: &str, detail: impl Into<String>, ms: i64) -> Self {
+        TestStep { kind: kind.into(), label: label.into(), status: status.into(), detail: detail.into(), ms }
+    }
+}
+
+/// 使用插件的端点，接口格式以插件声明的为准
+fn normalize_plugins(cfg: &mut Config, plugins: &[Arc<dyn Plugin>]) {
+    for ep in cfg.endpoints.iter_mut().filter(|e| !e.plugin.is_empty()) {
+        if let Some(p) = plugins.iter().find(|p| p.id() == ep.plugin) {
+            ep.protocol = p.protocol();
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -117,11 +155,16 @@ impl Gateway {
         let g = Self::build(&dir, ConfigFile::new(&dir), config, Arc::new(Store::memory()?), secrets, host);
         let mut inner = Arc::try_unwrap(g.0).map_err(|_| anyhow!("unreachable"))?;
         inner.plugins.extend(extra_plugins);
+        let mut cfg = (**inner.config.read()).clone();
+        normalize_plugins(&mut cfg, &inner.plugins);
+        *inner.config.write() = Arc::new(cfg);
         Ok(Gateway(Arc::new(inner)))
     }
 
-    fn build(dir: &Path, config_file: ConfigFile, config: Config, store: Arc<Store>, secrets: Arc<dyn SecretStore>, host: Arc<dyn Host>) -> Self {
+    fn build(dir: &Path, config_file: ConfigFile, mut config: Config, store: Arc<Store>, secrets: Arc<dyn SecretStore>, host: Arc<dyn Host>) -> Self {
         let (live, _) = broadcast::channel(256);
+        let plugins = crate::plugins::registry();
+        normalize_plugins(&mut config, &plugins);
         Gateway(Arc::new(Inner {
             dir: dir.to_path_buf(),
             config_file,
@@ -129,7 +172,7 @@ impl Gateway {
             creds: Credentials::new(secrets.clone()),
             secrets,
             host,
-            plugins: crate::plugins::registry(),
+            plugins,
             clients: Clients::default(),
             prices: crate::pricing::PriceCache::new(dir),
             store,
@@ -169,7 +212,8 @@ impl Gateway {
     }
 
     /// 保存配置；端口变了会自动重启服务
-    pub async fn save_config(&self, cfg: Config) -> Result<()> {
+    pub async fn save_config(&self, mut cfg: Config) -> Result<()> {
+        normalize_plugins(&mut cfg, &self.0.plugins);
         cfg.validate()?;
         let old_port = self.config().server.port;
         self.0.config_file.save(&cfg)?;
@@ -241,6 +285,7 @@ impl Gateway {
         if self.0.janitor_started.swap(true, std::sync::atomic::Ordering::SeqCst) {
             return;
         }
+        self.start_auth_keeper();
         let g = self.clone();
         tokio::spawn(async move {
             loop {
@@ -251,6 +296,38 @@ impl Gateway {
                 })
                 .await;
                 tokio::time::sleep(Duration::from_secs(1800)).await;
+            }
+        });
+    }
+
+    /// 插件凭证的后台维护：启动时没有凭证就登录（和命令行工具启动时打开网页登录一样），
+    /// 之后每分钟检查一次，快到期就续期
+    fn start_auth_keeper(&self) {
+        let g = self.clone();
+        tokio::spawn(async move {
+            let mut first = true;
+            loop {
+                let cfg = g.config();
+                for ep in cfg.endpoints.iter().filter(|e| e.enabled && !e.plugin.is_empty()) {
+                    let Some(plugin) = g.plugin(&ep.plugin).filter(|p| p.uses_login()) else { continue };
+                    let Ok(http) = g.0.clients.get(&cfg, &ep.proxy, &*g.0.secrets) else { continue };
+                    let Ok(Some((_, ctx))) = g.plugin_ctx(&cfg, &ep.id, None, "", http) else { continue };
+                    let g2 = g.clone();
+                    let startup_login = first && plugin.login_on_start() && !g.0.creds.status(&ep.id).logged_in;
+                    tokio::spawn(async move {
+                        let r = if startup_login {
+                            g2.0.creds.login(&*plugin, &ctx).await.map(|_| true)
+                        } else {
+                            g2.0.creds.refresh_if_due(&*plugin, &ctx, plugin.refresh_before_secs()).await
+                        };
+                        if let Err(e) = r {
+                            tracing::warn!("端点「{}」登录 / 续期失败：{e}", ctx.endpoint_name);
+                            g2.0.host.notify("kiki-proxy", &format!("「{}」登录 / 续期失败：{e}", ctx.endpoint_name));
+                        }
+                    });
+                }
+                first = false;
+                tokio::time::sleep(Duration::from_secs(60)).await;
             }
         });
     }
@@ -285,6 +362,8 @@ impl Gateway {
                 description: p.description().into(),
                 settings: p.settings(),
                 uses_login: p.uses_login(),
+                protocol: p.protocol(),
+                default_base_url: p.default_base_url().into(),
             })
             .collect()
     }
@@ -994,6 +1073,99 @@ impl Gateway {
         let Some(m) = m else {
             return TestResult { message: "这个端点还没有配置模型".into(), ..Default::default() };
         };
+        self.test_model(&cfg, &ep, m).await
+    }
+
+    /// 分步测试：网络 → 登录 / 鉴权 → 每个模型能否回复。前一步失败就停下。
+    pub async fn test_endpoint_report(&self, endpoint_id: &str) -> TestReport {
+        let cfg = self.config();
+        let Some(ep) = cfg.endpoint(endpoint_id).cloned() else {
+            return TestReport { ok: false, steps: vec![TestStep::new("network", "端点", "fail", "端点不存在，请先保存", 0)] };
+        };
+        let mut steps = Vec::new();
+        let done = |steps: Vec<TestStep>| TestReport { ok: steps.iter().all(|s| s.status != "fail"), steps };
+
+        // 1. 网络：通过端点的出口访问上游地址，收到任何 HTTP 响应都算通
+        let proxy_name = match ep.proxy.as_str() {
+            crate::config::PROXY_DIRECT => "直连".to_string(),
+            crate::config::PROXY_SYSTEM | "" => "系统代理".to_string(),
+            id => cfg.proxy(id).map(|p| p.name.clone()).unwrap_or_else(|| id.to_string()),
+        };
+        let host = url::Url::parse(&ep.base_url).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_default();
+        let t0 = Instant::now();
+        let net = match self.0.clients.get(&cfg, &ep.proxy, &*self.0.secrets) {
+            Err(e) => Err(e.to_string()),
+            Ok(http) => match tokio::time::timeout(Duration::from_secs(15), http.get(&ep.base_url).send()).await {
+                Err(_) => Err("15 秒内没有响应".to_string()),
+                Ok(Err(e)) => Err(describe_reqwest_error(&e)),
+                Ok(Ok(r)) => Ok(r.status().as_u16()),
+            },
+        };
+        let ms = t0.elapsed().as_millis() as i64;
+        match net {
+            Ok(_) => steps.push(TestStep::new("network", "网络", "ok", format!("经{proxy_name}访问 {host} 正常"), ms)),
+            Err(e) => {
+                steps.push(TestStep::new("network", "网络", "fail", format!("经{proxy_name}访问 {host} 失败：{e}"), ms));
+                return done(steps);
+            }
+        }
+
+        // 2. 登录 / 鉴权
+        let plugin = self.plugin(&ep.plugin);
+        if let Some(p) = plugin.as_ref().filter(|p| p.uses_login()) {
+            let t0 = Instant::now();
+            let http = self.0.clients.get(&cfg, &ep.proxy, &*self.0.secrets).ok();
+            let r = match http.and_then(|h| self.plugin_ctx(&cfg, &ep.id, None, "", h).ok().flatten()) {
+                Some((_, ctx)) => self.0.creds.get(&**p, &ctx).await.map_err(|e| e.to_string()),
+                None => Err("插件设置不完整".to_string()),
+            };
+            let ms = t0.elapsed().as_millis() as i64;
+            match r {
+                Ok(c) => {
+                    let detail = match c.expires_at {
+                        Some(t) => format!("已登录，{} 后到期，会自动续期", fmt_duration(t - crate::ir::now_secs())),
+                        None => "已登录".to_string(),
+                    };
+                    steps.push(TestStep::new("auth", "登录", "ok", detail, ms));
+                }
+                Err(e) => {
+                    steps.push(TestStep::new("auth", "登录", "fail", e, ms));
+                    return done(steps);
+                }
+            }
+        } else if self.0.secrets.get(&keys::endpoint_api_key(&ep.id)).ok().flatten().is_some_and(|k| !k.is_empty()) {
+            steps.push(TestStep::new("auth", "鉴权", "ok", "已配置 API Key，下一步实际调用模型时验证", 0));
+        } else {
+            steps.push(TestStep::new("auth", "鉴权", "skip", "没有配置 API Key（服务不需要的话可以忽略）", 0));
+        }
+
+        // 3. 每个启用的模型发一句话
+        let models: Vec<_> = ep.models.iter().filter(|m| m.enabled).take(12).cloned().collect();
+        if models.is_empty() {
+            steps.push(TestStep::new("model", "模型", "fail", "还没有配置模型", 0));
+            return done(steps);
+        }
+        let results = futures::future::join_all(models.iter().map(|m| self.test_model(&cfg, &ep, m.clone()))).await;
+        for (m, r) in models.iter().zip(results) {
+            let detail = if r.ok {
+                format!("回复了「{}」", r.message)
+            } else if matches!(r.status, 401 | 403) {
+                format!("HTTP {}：{}（鉴权失败：检查 API Key 或登录状态、是否有这个模型的权限）", r.status, r.message)
+            } else if r.status == 404 {
+                format!("HTTP 404：{}（模型名可能不对）", r.message)
+            } else if r.status > 0 {
+                format!("HTTP {}：{}", r.status, r.message)
+            } else {
+                r.message.clone()
+            };
+            steps.push(TestStep::new("model", &m.name, if r.ok { "ok" } else { "fail" }, detail, r.latency_ms));
+        }
+        done(steps)
+    }
+
+    async fn test_model(&self, cfg: &Config, ep: &crate::config::EndpointConfig, m: crate::config::ModelConfig) -> TestResult {
+        let cfg = cfg.clone();
+        let ep = ep.clone();
         let target = Target {
             gateway_model: format!("{}/{}", ep.id, m.name),
             upstream_model: m.upstream_id().to_string(),
@@ -1207,6 +1379,18 @@ fn is_context_overflow(msg: &str) -> bool {
     ]
     .iter()
     .any(|p| m.contains(p))
+}
+
+fn fmt_duration(secs: i64) -> String {
+    if secs <= 0 {
+        "已经".to_string()
+    } else if secs < 3600 {
+        format!("{} 分钟", secs / 60)
+    } else if secs < 86400 {
+        format!("{} 小时", secs / 3600)
+    } else {
+        format!("{} 天", secs / 86400)
+    }
 }
 
 fn describe_reqwest_error(e: &reqwest::Error) -> String {

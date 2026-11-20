@@ -126,6 +126,50 @@ export default function SettingsPage() {
         </div>
 
         <div className="settings-group">
+          <h3>
+            故障切换
+            <span className="h3-hint">出现下面这些情况时，换到端点 / 模型设置的备选；已经开始输出的回答不会被打断重来</span>
+          </h3>
+          <div className="panel">
+            {(
+              [
+                ["onConnectError", "连接失败", "DNS 解析失败、连接被拒、代理不可用、TLS 错误、登录失败"],
+                ["onTimeout", "首字节超时", "超过端点设置的等待时间仍没有响应"],
+                ["on5xx", "上游 5xx", "服务端错误、过载（500 / 502 / 503 / 529 等）"],
+                ["on429", "上游 429", "被限流"],
+              ] as const
+            ).map(([k, title, desc]) => (
+              <div key={k} className="setting-row">
+                <div className="setting-text">
+                  <b>{title}</b>
+                  <span>{desc}</span>
+                </div>
+                <Switch on={config.failover[k]} onChange={(v) => save((c) => ({ ...c, failover: { ...c.failover, [k]: v } }))} />
+              </div>
+            ))}
+            <div className="setting-row">
+              <div className="setting-text">
+                <b>其他状态码</b>
+                <span>额外触发切换的状态码，逗号分隔，例如 401, 403</span>
+              </div>
+              <input
+                className="input mono"
+                style={{ width: 200 }}
+                defaultValue={config.failover.extraStatus.join(", ")}
+                placeholder="例如 403"
+                onBlur={(e) => {
+                  const extraStatus = e.target.value
+                    .split(/[,，\s]+/)
+                    .map(Number)
+                    .filter((n) => n >= 100 && n < 600);
+                  if (extraStatus.join() !== config.failover.extraStatus.join()) save((c) => ({ ...c, failover: { ...c.failover, extraStatus } }));
+                }}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="settings-group">
           <h3>日志</h3>
           <div className="panel">
             <div className="setting-row">

@@ -110,12 +110,29 @@ export interface PluginInfo {
   description: string;
   settings: SettingField[];
   usesLogin: boolean;
+  /** 内部服务的接口格式 */
+  protocol: Protocol;
+  defaultBaseUrl: string;
+}
+
+export interface TestStep {
+  kind: "network" | "auth" | "model";
+  label: string;
+  status: "ok" | "fail" | "skip";
+  detail: string;
+  ms: number;
+}
+
+export interface TestReport {
+  ok: boolean;
+  steps: TestStep[];
 }
 
 export interface CredentialStatus {
   loggedIn: boolean;
   expiresAt: number | null;
   expired: boolean;
+  error?: string | null;
 }
 
 export interface TestResult {
@@ -329,6 +346,7 @@ export const api = {
 
   testEndpoint: (id: string, model?: string) => invoke<TestResult>("test_endpoint", { id, model: model ?? null }),
   testProxy: (id: string) => invoke<TestResult>("test_proxy", { id }),
+  testEndpointReport: (id: string) => invoke<TestReport>("test_endpoint_report", { id }),
 
   pricingStatus: () => invoke<PricingStatus>("pricing_status"),
   refreshPricing: () => invoke<PricingStatus>("refresh_pricing"),

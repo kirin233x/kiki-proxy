@@ -48,14 +48,14 @@
       "id": "internal",
       "name": "内部模型服务",
       "enabled": true,
-      "protocol": "anthropic",
-      "baseUrl": "https://llm.corp.example/api",
+      "protocol": "openai_chat",
+      "baseUrl": "https://llm.corp.example/v1",
       "auth": "none",
       "proxy": "direct",
-      "plugin": "example_sso",
+      "plugin": "corp_example",
       "pluginSettings": {
-        "token_url": "https://sso.corp.example/token",
-        "biz": "ai-coding"
+        "login_url": "https://sso.corp.example/login",
+        "token_url": "https://sso.corp.example/token"
       },
       "headers": {},
       "timeoutSecs": 300,

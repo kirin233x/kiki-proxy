@@ -9,16 +9,17 @@ import {
   ModelConfig,
   newEndpoint,
   newModel,
+  protocolLabel,
   PROTOCOLS,
   secretKeys,
-  TestResult,
 } from "../api";
 import { useApp } from "../App";
 import { ModelChain } from "../components/ModelInput";
-import { Field, SecretInput, StatusDot, Switch, useToast } from "../components/ui";
+import { Field, SecretInput, Switch, useToast } from "../components/ui";
 import ContextSelect from "../components/ContextSelect";
 import UpstreamModelsDialog from "../components/UpstreamModelsDialog";
-import { fmtMs, protocolColor, slugify } from "../utils";
+import TestDialog from "../components/TestDialog";
+import { protocolColor, slugify } from "../utils";
 
 /** 常见服务的预设，填上去再改 */
 const PRESETS: { label: string; ep: Partial<EndpointConfig>; models: string[] }[] = [
@@ -59,7 +60,7 @@ export default function EndpointEditor({ id }: { id: string | null }) {
       .join("\n"),
   );
   const [saving, setSaving] = useState(false);
-  const [test, setTest] = useState<TestResult | "busy" | null>(null);
+  const [testing, setTesting] = useState(false);
   const [cred, setCred] = useState<CredentialStatus | null>(null);
   const [loggingIn, setLoggingIn] = useState(false);
   const [filling, setFilling] = useState(false);
@@ -152,8 +153,7 @@ export default function EndpointEditor({ id }: { id: string | null }) {
 
   const runTest = async () => {
     await save(true);
-    setTest("busy");
-    setTest(await api.testEndpoint(ep.id));
+    setTesting(true);
   };
 
   const login = async () => {
@@ -183,9 +183,9 @@ export default function EndpointEditor({ id }: { id: string | null }) {
           </div>
           <div className="header-actions">
             {!isNew && (
-              <button className="btn" onClick={runTest} disabled={test === "busy"}>
+              <button className="btn" onClick={runTest}>
                 <Zap size={16} />
-                {test === "busy" ? "测试中…" : "保存并测试"}
+                保存并测试
               </button>
             )}
             <button className="btn btn-primary" onClick={() => save()} disabled={saving}>
@@ -194,14 +194,6 @@ export default function EndpointEditor({ id }: { id: string | null }) {
             </button>
           </div>
         </div>
-
-        {test && test !== "busy" && (
-          <div className={`banner ${test.ok ? "ok" : "err"}`}>
-            <StatusDot tone={test.ok ? "ok" : "err"} />
-            <b>{test.ok ? `可用 · ${fmtMs(test.latencyMs)}` : `失败${test.status ? `（HTTP ${test.status}）` : ""}`}</b>
-            <span>{test.message}</span>
-          </div>
-        )}
 
         {isNew && (
           <div className="presets">
@@ -242,23 +234,117 @@ export default function EndpointEditor({ id }: { id: string | null }) {
               />
             </Field>
             <div className="span-2">
-              <Field label="协议">
+              <Field label="类型">
                 <div className="proto-pick">
                   {PROTOCOLS.map((p) => (
-                    <button key={p.value} className={ep.protocol === p.value ? "on" : ""} onClick={() => set("protocol", p.value)}>
+                    <button
+                      key={p.value}
+                      className={!ep.plugin && ep.protocol === p.value ? "on" : ""}
+                      onClick={() => setEp((x) => ({ ...x, protocol: p.value, plugin: "" }))}
+                    >
                       <i style={{ background: protocolColor[p.value] }} />
                       <b>{p.label}</b>
                       <span>{p.hint}</span>
                     </button>
                   ))}
+                  {plugins.map((p) => (
+                    <button
+                      key={p.id}
+                      className={`plugin ${ep.plugin === p.id ? "on" : ""}`}
+                      onClick={() => setEp((x) => ({ ...x, plugin: p.id, protocol: p.protocol, baseUrl: x.baseUrl || p.defaultBaseUrl }))}
+                    >
+                      <i style={{ background: "var(--accent)" }} />
+                      <b>{p.name}</b>
+                      <span>
+                        插件 · {protocolLabel(p.protocol)} 格式{p.usesLogin ? " · 需要登录" : ""}
+                      </span>
+                    </button>
+                  ))}
                 </div>
               </Field>
             </div>
+            {ep.plugin && !plugin && (
+              <div className="span-2 banner err">这个端点使用的插件「{ep.plugin}」没有编译进当前版本</div>
+            )}
+            {plugin && (
+              <div className="span-2 plugin-block">
+                {plugin.description && (
+                  <div className="plugin-desc">
+                    <Puzzle size={15} />
+                    {plugin.description}
+                  </div>
+                )}
+                <div className="form-grid">
+                  {plugin.settings.map((f) => (
+                    <div key={f.key} className={f.kind === "multiline" ? "span-2" : ""}>
+                      <Field label={f.label} help={f.help} required={f.required}>
+                        {f.kind === "secret" ? (
+                          <SecretInput
+                            isSet={!!flags[secretKeys.pluginSecret(ep.id, f.key)]}
+                            value={pluginSecrets[f.key] ?? ""}
+                            onChange={(v) => setPluginSecrets({ ...pluginSecrets, [f.key]: v })}
+                          />
+                        ) : f.kind === "multiline" ? (
+                          <textarea
+                            className="textarea mono"
+                            rows={4}
+                            value={ep.pluginSettings[f.key] ?? f.default}
+                            onChange={(e) => set("pluginSettings", { ...ep.pluginSettings, [f.key]: e.target.value })}
+                          />
+                        ) : (
+                          <input
+                            className={`input ${f.kind === "url" ? "mono" : ""}`}
+                            value={ep.pluginSettings[f.key] ?? f.default}
+                            placeholder={f.default}
+                            onChange={(e) => set("pluginSettings", { ...ep.pluginSettings, [f.key]: e.target.value })}
+                          />
+                        )}
+                      </Field>
+                    </div>
+                  ))}
+                </div>
+                {plugin.usesLogin && (
+                  <div className={`login-box ${cred?.error ? "err" : ""}`}>
+                    <KeyRound size={18} />
+                    <div className="login-text">
+                      <b>{isNew ? "保存后登录" : cred?.loggedIn ? (cred.expired ? "登录已过期" : "已登录") : "未登录"}</b>
+                      <span>
+                        {cred?.error
+                          ? `上次登录 / 续期失败：${cred.error}`
+                          : cred?.loggedIn && cred.expiresAt
+                            ? `${new Date(cred.expiresAt * 1000).toLocaleString("zh-CN")} 到期，到期前会在后台自动续期`
+                            : "App 启动时会自动打开登录；登录后 token 存在钥匙串里，到期前自动续期"}
+                      </span>
+                    </div>
+                    {cred?.loggedIn && (
+                      <button
+                        className="btn btn-sm"
+                        onClick={async () => {
+                          await api.logoutEndpoint(ep.id);
+                          setCred(await api.credentialStatus(ep.id));
+                        }}
+                      >
+                        <LogOut size={14} />
+                        退出
+                      </button>
+                    )}
+                    {!isNew && (
+                      <button className="btn btn-sm btn-primary" onClick={login} disabled={loggingIn}>
+                        <LogIn size={14} />
+                        {loggingIn ? "登录中…" : cred?.loggedIn ? "重新登录" : "登录"}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="span-2">
-              <Field label="地址" required help="带不带 /v1 都可以，例如 https://api.deepseek.com 或 https://api.openai.com/v1">
+              <Field label="地址" required help={plugin ? `内部服务的接口地址（${protocolLabel(plugin.protocol)} 格式）` : "带不带 /v1 都可以，例如 https://api.deepseek.com 或 https://api.openai.com/v1"}>
                 <input className="input mono" value={ep.baseUrl} placeholder="https://" onChange={(e) => set("baseUrl", e.target.value.trim())} />
               </Field>
             </div>
+            {!plugin && (
+              <>
             <Field label="API Key" help="保存在 macOS 钥匙串里，不会写进配置文件">
               <SecretInput
                 isSet={!!flags[secretKeys.apiKey(ep.id)]}
@@ -280,6 +366,8 @@ export default function EndpointEditor({ id }: { id: string | null }) {
                 ))}
               </select>
             </Field>
+              </>
+            )}
             <Field label="出口" help="访问这个端点走哪条线路，可在「出口代理」里添加">
               <select className="select" value={ep.proxy} onChange={(e) => set("proxy", e.target.value)}>
                 <option value="system">跟随系统代理</option>
@@ -423,95 +511,6 @@ export default function EndpointEditor({ id }: { id: string | null }) {
           </div>
         </div>
 
-        {/* ---------------------------------------------------------------- 插件 */}
-        <div className="settings-group">
-          <h3>
-            插件
-            <span className="h3-hint">特殊鉴权、登录、改写请求和响应，在 src-tauri/core/src/plugins/ 里编写</span>
-          </h3>
-          <div className="panel panel-pad">
-            <Field label="使用插件">
-              <select className="select" value={ep.plugin} onChange={(e) => set("plugin", e.target.value)}>
-                <option value="">不使用</option>
-                {plugins.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-                {ep.plugin && !plugin && <option value={ep.plugin}>{ep.plugin}（未编译进当前版本）</option>}
-              </select>
-            </Field>
-            {plugin && (
-              <>
-                {plugin.description && (
-                  <div className="plugin-desc">
-                    <Puzzle size={15} />
-                    {plugin.description}
-                  </div>
-                )}
-                <div className="form-grid">
-                  {plugin.settings.map((f) => (
-                    <div key={f.key} className={f.kind === "multiline" ? "span-2" : ""}>
-                      <Field label={f.label} help={f.help} required={f.required}>
-                        {f.kind === "secret" ? (
-                          <SecretInput
-                            isSet={!!flags[secretKeys.pluginSecret(ep.id, f.key)]}
-                            value={pluginSecrets[f.key] ?? ""}
-                            onChange={(v) => setPluginSecrets({ ...pluginSecrets, [f.key]: v })}
-                          />
-                        ) : f.kind === "multiline" ? (
-                          <textarea
-                            className="textarea mono"
-                            rows={4}
-                            value={ep.pluginSettings[f.key] ?? f.default}
-                            onChange={(e) => set("pluginSettings", { ...ep.pluginSettings, [f.key]: e.target.value })}
-                          />
-                        ) : (
-                          <input
-                            className={`input ${f.kind === "url" ? "mono" : ""}`}
-                            value={ep.pluginSettings[f.key] ?? f.default}
-                            placeholder={f.default}
-                            onChange={(e) => set("pluginSettings", { ...ep.pluginSettings, [f.key]: e.target.value })}
-                          />
-                        )}
-                      </Field>
-                    </div>
-                  ))}
-                </div>
-                {plugin.usesLogin && !isNew && (
-                  <div className="login-box">
-                    <KeyRound size={18} />
-                    <div className="login-text">
-                      <b>{cred?.loggedIn ? (cred.expired ? "登录已过期" : "已登录") : "未登录"}</b>
-                      <span>
-                        {cred?.loggedIn && cred.expiresAt
-                          ? `凭证 ${new Date(cred.expiresAt * 1000).toLocaleString("zh-CN")} 过期，到期前会自动续期`
-                          : "第一次请求时也会自动弹出登录；凭证失效时会自动重新登录并重试"}
-                      </span>
-                    </div>
-                    {cred?.loggedIn && (
-                      <button
-                        className="btn btn-sm"
-                        onClick={async () => {
-                          await api.logoutEndpoint(ep.id);
-                          setCred(await api.credentialStatus(ep.id));
-                        }}
-                      >
-                        <LogOut size={14} />
-                        退出
-                      </button>
-                    )}
-                    <button className="btn btn-sm btn-primary" onClick={login} disabled={loggingIn}>
-                      <LogIn size={14} />
-                      {loggingIn ? "登录中…" : cred?.loggedIn ? "重新登录" : "登录"}
-                    </button>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        </div>
-
         {/* ---------------------------------------------------------------- 高级 */}
         <div className="settings-group">
           <h3>高级</h3>
@@ -581,6 +580,15 @@ export default function EndpointEditor({ id }: { id: string | null }) {
           </div>
         </div>
       </div>
+      {testing && (
+        <TestDialog
+          endpoint={ep}
+          onClose={() => {
+            setTesting(false);
+            if (plugin?.usesLogin) api.credentialStatus(ep.id).then(setCred);
+          }}
+        />
+      )}
       {fetching && (
         <UpstreamModelsDialog
           endpoint={ep}

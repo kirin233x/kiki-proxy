@@ -263,6 +263,11 @@ async fn test_endpoint(state: State<'_, AppState>, id: String, model: Option<Str
 }
 
 #[tauri::command]
+async fn test_endpoint_report(state: State<'_, AppState>, id: String) -> CmdResult<kiki_core::gateway::TestReport> {
+    Ok(state.gateway.test_endpoint_report(&id).await)
+}
+
+#[tauri::command]
 async fn test_proxy(state: State<'_, AppState>, id: String) -> CmdResult<TestResult> {
     Ok(state.gateway.test_proxy(&id).await)
 }
@@ -480,6 +485,7 @@ pub fn run() {
             credential_status,
             answer_prompt,
             test_endpoint,
+            test_endpoint_report,
             test_proxy,
             pricing_status,
             refresh_pricing,

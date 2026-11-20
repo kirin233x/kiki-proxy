@@ -1,8 +1,11 @@
 //! 插件接口。
 //!
-//! 插件是编译进 App 的 Rust 代码，用来处理「非标准」的上游：特殊鉴权（SSO、账号密码、
-//! 动态 token）、改写请求和响应等。协议转换、出口代理、故障切换、日志这些通用的事情
-//! 由网关负责，插件只管差异部分。
+//! 插件是编译进 App 的 Rust 代码，代表一种「端点类型」，比如「公司内部服务」。
+//! 在界面上它和 Anthropic、OpenAI 一样，是新建端点时可选的类型。
+//!
+//! 插件声明内部服务说的是哪种标准格式（`protocol()`，默认 OpenAI Chat），
+//! 网关负责把任何客户端（Claude Code、Codex、Gemini CLI……）的请求转换成这种格式，
+//! 插件只需要关心：登录状态（登录、存 token、续期），以及内部格式和标准格式不一样的小地方。
 //!
 //! 写一个插件的步骤见 `plugins/mod.rs` 顶部的说明。
 
@@ -348,6 +351,26 @@ pub trait Plugin: Send + Sync + 'static {
     /// 需要用户在端点设置里填的东西
     fn settings(&self) -> Vec<SettingField> {
         vec![]
+    }
+
+    /// 内部服务使用的接口格式。网关会把客户端请求转换成这种格式后再交给插件。
+    fn protocol(&self) -> Protocol {
+        Protocol::OpenaiChat
+    }
+
+    /// 新建这种端点时预填的地址
+    fn default_base_url(&self) -> &'static str {
+        ""
+    }
+
+    /// App 启动时如果没有有效凭证就主动登录（像命令行工具启动时打开网页登录一样）
+    fn login_on_start(&self) -> bool {
+        self.uses_login()
+    }
+
+    /// 凭证到期前多少秒在后台主动续期（调用 `refresh`）
+    fn refresh_before_secs(&self) -> i64 {
+        300
     }
 
     /// 是否使用网关的凭证管理（login / refresh / apply_credential）

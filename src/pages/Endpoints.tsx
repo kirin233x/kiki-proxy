@@ -1,25 +1,25 @@
-import { useState } from "react";
-import { Copy, MoreHorizontal, Pencil, Plus, Power, Server, Trash2, Zap } from "lucide-react";
-import { api, EndpointConfig, protocolLabel, TestResult } from "../api";
+import { useEffect, useState } from "react";
+import { Copy, MoreHorizontal, Pencil, Plus, ScrollText, Server, Trash2, Zap } from "lucide-react";
+import { api, EndpointConfig, fmtContext, protocolLabel, UsageRow } from "../api";
 import { useApp } from "../App";
-import { Confirm, Empty, Menu, StatusDot, Switch, useToast } from "../components/ui";
-import { fmtMs, protocolColor } from "../utils";
+import TestDialog from "../components/TestDialog";
+import { Confirm, Empty, Menu, Switch, useToast } from "../components/ui";
+import { fmtCost, fmtNum, protocolColor } from "../utils";
 
 export default function Endpoints() {
-  const { config, saveConfig, go } = useApp();
+  const { config, saveConfig, go, plugins } = useApp();
   const toast = useToast();
   const [menu, setMenu] = useState<{ el: HTMLElement; ep: EndpointConfig } | null>(null);
   const [del, setDel] = useState<EndpointConfig | null>(null);
-  const [tests, setTests] = useState<Record<string, TestResult | "busy">>({});
+  const [testing, setTesting] = useState<EndpointConfig | null>(null);
+  const [usage, setUsage] = useState<Record<string, UsageRow>>({});
+
+  useEffect(() => {
+    api.getStats(1).then((s) => setUsage(Object.fromEntries(s.byEndpoint.map((r) => [r.key, r]))));
+  }, []);
 
   const update = (id: string, patch: Partial<EndpointConfig>) =>
     saveConfig({ ...config, endpoints: config.endpoints.map((e) => (e.id === id ? { ...e, ...patch } : e)) });
-
-  const test = async (e: EndpointConfig) => {
-    setTests((t) => ({ ...t, [e.id]: "busy" }));
-    const r = await api.testEndpoint(e.id);
-    setTests((t) => ({ ...t, [e.id]: r }));
-  };
 
   const duplicate = (e: EndpointConfig) => {
     let id = `${e.id}-2`;
@@ -36,7 +36,7 @@ export default function Endpoints() {
         <div className="page-header">
           <div>
             <h1 className="page-title">端点</h1>
-            <div className="page-subtitle">每个端点有一个前缀，客户端用「前缀/模型名」访问，例如 internal/sonnet</div>
+            <div className="page-subtitle">客户端用「前缀/模型名」访问，例如 {config.endpoints[0] ? `${config.endpoints[0].id}/${config.endpoints[0].models[0]?.name ?? "模型"}` : "internal/sonnet"}</div>
           </div>
           <div className="header-actions">
             <button className="btn btn-primary" onClick={() => go({ name: "endpoint", id: null })}>
@@ -53,56 +53,71 @@ export default function Endpoints() {
             </Empty>
           </div>
         ) : (
-          <div className="ep-list">
+          <div className="ep-cards">
             {config.endpoints.map((e) => {
-              const t = tests[e.id];
-              const proxy =
-                e.proxy === "direct" ? "直连" : e.proxy === "system" ? "跟随系统代理" : config.proxies.find((p) => p.id === e.proxy)?.name ?? e.proxy;
+              const u = usage[e.id];
+              const plugin = plugins.find((p) => p.id === e.plugin);
+              const typeLabel = plugin ? plugin.name : protocolLabel(e.protocol);
+              const color = plugin ? "#6d5bff" : protocolColor[e.protocol];
               return (
-                <div key={e.id} className={`ep-row panel ${e.enabled ? "" : "off"}`}>
-                  <div className="ep-row-main" onClick={() => go({ name: "endpoint", id: e.id })}>
-                    <div className="ep-row-head">
-                      <span className="ep-glyph" style={{ background: protocolColor[e.protocol] }}>
-                        {e.name.slice(0, 1).toUpperCase()}
-                      </span>
-                      <div style={{ minWidth: 0 }}>
-                        <div className="ep-row-name">
-                          {e.name}
-                          <code className="prefix">{e.id}/</code>
-                        </div>
-                        <div className="ep-row-url">{e.baseUrl}</div>
-                      </div>
+                <div key={e.id} className={`ep2 panel ${e.enabled ? "" : "off"}`}>
+                  <div className="ep2-head">
+                    <span className="ep-glyph" style={{ background: color }}>
+                      {e.name.slice(0, 1).toUpperCase()}
+                    </span>
+                    <div className="ep2-title" onClick={() => go({ name: "endpoint", id: e.id })}>
+                      <b>
+                        {e.name}
+                        <code className="prefix">{e.id}/</code>
+                      </b>
+                      <span>{typeLabel}</span>
                     </div>
-                    <div className="ep-row-tags">
-                      <span className="proto-tag" style={{ ["--c" as string]: protocolColor[e.protocol], ["--cb" as string]: protocolColor[e.protocol] + "1f" }}>
-                        {protocolLabel(e.protocol)}
-                      </span>
-                      <span className="tag">出口：{proxy}</span>
-                      {e.plugin && <span className="tag accent">插件：{e.plugin}</span>}
-                      {e.fallbacks.length > 0 && <span className="tag">故障时 → {e.fallbacks.join("、")}</span>}
+                    <Switch on={e.enabled} onChange={(v) => update(e.id, { enabled: v })} />
+                  </div>
+
+                  <div className="ep2-usage">
+                    <div>
+                      <b>{fmtNum(u?.requests ?? 0)}</b>
+                      <span>今日请求</span>
                     </div>
-                    <div className="ep-models">
-                      {e.models.map((m) => (
-                        <span key={m.name} className={`model-chip ${m.enabled ? "" : "off"}`}>
-                          {m.name}
-                          {m.upstream && m.upstream !== m.name && <em>→ {m.upstream}</em>}
-                        </span>
-                      ))}
-                      {e.models.length === 0 && <span className="muted-sm">还没有模型（仍然可以用「{e.id}/任意模型名」直接透传）</span>}
+                    <div>
+                      <b className={u && u.errors / u.requests > 0.05 ? "bad" : ""}>{u?.requests ? `${((u.errors / u.requests) * 100).toFixed(u.errors ? 1 : 0)}%` : "—"}</b>
+                      <span>失败率</span>
+                    </div>
+                    <div>
+                      <b>{fmtNum((u?.input ?? 0) + (u?.cacheRead ?? 0) + (u?.output ?? 0))}</b>
+                      <span>Token</span>
+                    </div>
+                    <div>
+                      <b>{u?.cost ? fmtCost(u.cost) : "—"}</b>
+                      <span>费用</span>
                     </div>
                   </div>
-                  <div className="ep-row-side">
-                    <Switch on={e.enabled} onChange={(v) => update(e.id, { enabled: v })} />
-                    <button className="btn btn-sm" onClick={() => test(e)} disabled={t === "busy"}>
-                      <Zap size={14} />
-                      {t === "busy" ? "测试中…" : "测试"}
-                    </button>
-                    {t && t !== "busy" && (
-                      <div className={`test-result ${t.ok ? "ok" : "err"}`} title={t.message}>
-                        <StatusDot tone={t.ok ? "ok" : "err"} />
-                        {t.ok ? fmtMs(t.latencyMs) : t.message.slice(0, 40)}
+
+                  <div className="ep2-models">
+                    {e.models.length === 0 && <span className="muted-sm">还没有配置模型</span>}
+                    {e.models.map((m) => (
+                      <div key={m.name} className={`ep2-model ${m.enabled ? "" : "off"}`}>
+                        <code>{m.name}</code>
+                        <span>{m.contextWindow ? fmtContext(m.contextWindow) : ""}</span>
                       </div>
-                    )}
+                    ))}
+                  </div>
+
+                  <div className="ep2-foot">
+                    <button className="btn btn-sm" onClick={() => setTesting(e)} disabled={!e.enabled}>
+                      <Zap size={14} />
+                      测试
+                    </button>
+                    <button className="btn btn-sm btn-ghost" onClick={() => go({ name: "logs", endpoint: e.id })}>
+                      <ScrollText size={14} />
+                      日志
+                    </button>
+                    <span style={{ flex: 1 }} />
+                    <button className="btn btn-sm btn-ghost" onClick={() => go({ name: "endpoint", id: e.id })}>
+                      <Pencil size={14} />
+                      编辑
+                    </button>
                     <button className="icon-btn" onClick={(ev) => setMenu({ el: ev.currentTarget, ep: e })}>
                       <MoreHorizontal size={18} />
                     </button>
@@ -113,14 +128,13 @@ export default function Endpoints() {
           </div>
         )}
       </div>
+      {testing && <TestDialog endpoint={testing} onClose={() => setTesting(null)} />}
       {menu && (
         <Menu
           anchor={menu.el}
           onClose={() => setMenu(null)}
           items={[
-            { label: "编辑", icon: <Pencil size={15} />, onClick: () => go({ name: "endpoint", id: menu.ep.id }) },
             { label: "复制", icon: <Copy size={15} />, onClick: () => duplicate(menu.ep) },
-            { label: menu.ep.enabled ? "停用" : "启用", icon: <Power size={15} />, onClick: () => update(menu.ep.id, { enabled: !menu.ep.enabled }) },
             "sep",
             { label: "删除", icon: <Trash2 size={15} />, danger: true, onClick: () => setDel(menu.ep) },
           ]}

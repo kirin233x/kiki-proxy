@@ -34,12 +34,12 @@ let config: Config = {
       id: "internal",
       name: "内部模型服务",
       enabled: true,
-      protocol: "anthropic",
-      baseUrl: "https://llm.corp.example/api",
+      protocol: "openai_chat",
+      baseUrl: "https://llm.corp.example/v1",
       auth: "none",
       proxy: "direct",
-      plugin: "example_sso",
-      pluginSettings: { token_url: "https://sso.corp.example/token", biz: "ai-coding" },
+      plugin: "corp_example",
+      pluginSettings: { login_url: "https://sso.corp.example/login", token_url: "https://sso.corp.example/token" },
       headers: {},
       timeoutSecs: 300,
       compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
@@ -207,16 +207,16 @@ function stats(days: number): Stats {
 
 const plugins: PluginInfo[] = [
   {
-    id: "example_sso",
-    name: "示例：内部 SSO",
-    description: "演示浏览器 SSO / 账号密码登录、token 刷新、改写请求与响应。复制 plugins/example.rs 改成你自己的。",
+    id: "corp_example",
+    name: "公司内部服务（示例）",
+    description: "OpenAI Chat 格式 + 网页登录 + 自动续期。复制 src-tauri/core/src/plugins/example.rs 改成你们的真实逻辑。",
     usesLogin: true,
+    protocol: "openai_chat",
+    defaultBaseUrl: "https://llm.corp.example/v1",
     settings: [
-      { key: "sso_url", label: "SSO 登录地址", help: "填了就用浏览器登录；留空则弹出账号密码表单", kind: "url", default: "", required: false },
-      { key: "token_url", label: "Token 接口", help: "", kind: "url", default: "", required: true },
-      { key: "callback_port", label: "回调端口", help: "SSO 要求固定回调端口时填写，否则留空", kind: "text", default: "", required: false },
-      { key: "biz", label: "业务线", help: "会写进请求体的 biz 字段", kind: "text", default: "ai-coding", required: false },
-      { key: "app_secret", label: "App Secret", help: "存在钥匙串里，会作为 X-App-Secret 请求头发送", kind: "secret", default: "", required: false },
+      { key: "login_url", label: "登录页地址", help: "打开这个网页登录，登录后会跳回 kiki-proxy", kind: "url", default: "", required: true },
+      { key: "token_url", label: "Token 接口", help: "用登录拿到的 code 换 token，也用来续期", kind: "url", default: "", required: true },
+      { key: "callback_port", label: "回调端口", help: "登录页要求固定回调端口时填写，否则留空", kind: "text", default: "", required: false },
     ],
   },
 ];
@@ -330,6 +330,26 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
           ? { ok: false, status: 400, latencyMs: 412, message: "API key not valid. Please pass a valid API key." }
           : { ok: true, status: 200, latencyMs: 600 + Math.round(Math.random() * 900), message: "Hello" },
       );
+    case "test_endpoint_report": {
+      await sleep(900);
+      const ep = config.endpoints.find((e) => e.id === args.id)!;
+      if (ep.id === "gm")
+        return r({ ok: false, steps: [{ kind: "network", label: "网络", status: "fail", detail: "经Clash访问 generativelanguage.googleapis.com 失败：连接失败：Connection refused", ms: 3 }] });
+      const steps: any[] = [{ kind: "network", label: "网络", status: "ok", detail: `经${ep.proxy === "direct" ? "直连" : "Clash"}访问 ${new URL(ep.baseUrl).host} 正常`, ms: 42 }];
+      steps.push(
+        ep.plugin
+          ? { kind: "auth", label: "登录", status: "ok", detail: "已登录，2 小时后到期，会自动续期", ms: 0 }
+          : { kind: "auth", label: "鉴权", status: "ok", detail: "已配置 API Key，下一步实际调用模型时验证", ms: 0 },
+      );
+      ep.models.filter((m) => m.enabled).forEach((m, i) =>
+        steps.push(
+          ep.id === "internal" && i === 1
+            ? { kind: "model", label: m.name, status: "fail", detail: "HTTP 403：model not allowed for this user（鉴权失败：检查 API Key 或登录状态、是否有这个模型的权限）", ms: 310 }
+            : { kind: "model", label: m.name, status: "ok", detail: "回复了「Hello!」", ms: 600 + i * 230 },
+        ),
+      );
+      return r({ ok: steps.every((x) => x.status !== "fail"), steps });
+    }
     case "test_proxy":
       await sleep(400);
       return r({ ok: true, status: 204, latencyMs: 120 + Math.round(Math.random() * 300), message: "HTTP 204" });
