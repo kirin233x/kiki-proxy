@@ -268,6 +268,16 @@ async fn test_endpoint_report(state: State<'_, AppState>, id: String) -> CmdResu
 }
 
 #[tauri::command]
+async fn test_step(state: State<'_, AppState>, id: String, step: String, model: Option<String>) -> CmdResult<kiki_core::gateway::TestStep> {
+    let g = &state.gateway;
+    Ok(match step.as_str() {
+        "network" => g.test_step_network(&id).await,
+        "auth" => g.test_step_auth(&id).await,
+        _ => g.test_step_model(&id, model.as_deref().unwrap_or("")).await,
+    })
+}
+
+#[tauri::command]
 async fn test_proxy(state: State<'_, AppState>, id: String) -> CmdResult<TestResult> {
     Ok(state.gateway.test_proxy(&id).await)
 }
@@ -486,6 +496,7 @@ pub fn run() {
             answer_prompt,
             test_endpoint,
             test_endpoint_report,
+            test_step,
             test_proxy,
             pricing_status,
             refresh_pricing,

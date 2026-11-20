@@ -1077,15 +1077,41 @@ impl Gateway {
     }
 
     /// 分步测试：网络 → 登录 / 鉴权 → 每个模型能否回复。前一步失败就停下。
+    /// 界面上是逐步调用下面三个 `test_step_*`，每完成一步就显示一步；这里是一次跑完的版本。
     pub async fn test_endpoint_report(&self, endpoint_id: &str) -> TestReport {
-        let cfg = self.config();
-        let Some(ep) = cfg.endpoint(endpoint_id).cloned() else {
-            return TestReport { ok: false, steps: vec![TestStep::new("network", "端点", "fail", "端点不存在，请先保存", 0)] };
-        };
         let mut steps = Vec::new();
         let done = |steps: Vec<TestStep>| TestReport { ok: steps.iter().all(|s| s.status != "fail"), steps };
+        let net = self.test_step_network(endpoint_id).await;
+        let failed = net.status == "fail";
+        steps.push(net);
+        if failed {
+            return done(steps);
+        }
+        let auth = self.test_step_auth(endpoint_id).await;
+        let failed = auth.status == "fail";
+        steps.push(auth);
+        if failed {
+            return done(steps);
+        }
+        let models: Vec<String> = self
+            .config()
+            .endpoint(endpoint_id)
+            .map(|e| e.models.iter().filter(|m| m.enabled).take(12).map(|m| m.name.clone()).collect())
+            .unwrap_or_default();
+        if models.is_empty() {
+            steps.push(TestStep::new("model", "模型", "fail", "还没有配置模型", 0));
+            return done(steps);
+        }
+        steps.extend(futures::future::join_all(models.iter().map(|m| self.test_step_model(endpoint_id, m))).await);
+        done(steps)
+    }
 
-        // 1. 网络：通过端点的出口访问上游地址，收到任何 HTTP 响应都算通
+    /// 第 1 步：通过端点的出口访问上游地址，收到任何 HTTP 响应都算通
+    pub async fn test_step_network(&self, endpoint_id: &str) -> TestStep {
+        let cfg = self.config();
+        let Some(ep) = cfg.endpoint(endpoint_id).cloned() else {
+            return TestStep::new("network", "网络", "fail", "端点不存在，请先保存", 0);
+        };
         let proxy_name = match ep.proxy.as_str() {
             crate::config::PROXY_DIRECT => "直连".to_string(),
             crate::config::PROXY_SYSTEM | "" => "系统代理".to_string(),
@@ -1103,64 +1129,65 @@ impl Gateway {
         };
         let ms = t0.elapsed().as_millis() as i64;
         match net {
-            Ok(_) => steps.push(TestStep::new("network", "网络", "ok", format!("经{proxy_name}访问 {host} 正常"), ms)),
-            Err(e) => {
-                steps.push(TestStep::new("network", "网络", "fail", format!("经{proxy_name}访问 {host} 失败：{e}"), ms));
-                return done(steps);
-            }
+            Ok(_) => TestStep::new("network", "网络", "ok", format!("经{proxy_name}访问 {host} 正常"), ms),
+            Err(e) => TestStep::new("network", "网络", "fail", format!("经{proxy_name}访问 {host} 失败：{e}"), ms),
         }
+    }
 
-        // 2. 登录 / 鉴权
-        let plugin = self.plugin(&ep.plugin);
-        if let Some(p) = plugin.as_ref().filter(|p| p.uses_login()) {
+    /// 第 2 步：插件端点检查登录（没登录会触发登录），普通端点检查是否配置了 API Key
+    pub async fn test_step_auth(&self, endpoint_id: &str) -> TestStep {
+        let cfg = self.config();
+        let Some(ep) = cfg.endpoint(endpoint_id).cloned() else {
+            return TestStep::new("auth", "鉴权", "fail", "端点不存在，请先保存", 0);
+        };
+        if let Some(p) = self.plugin(&ep.plugin).filter(|p| p.uses_login()) {
             let t0 = Instant::now();
             let http = self.0.clients.get(&cfg, &ep.proxy, &*self.0.secrets).ok();
             let r = match http.and_then(|h| self.plugin_ctx(&cfg, &ep.id, None, "", h).ok().flatten()) {
-                Some((_, ctx)) => self.0.creds.get(&**p, &ctx).await.map_err(|e| e.to_string()),
+                Some((_, ctx)) => self.0.creds.get(&*p, &ctx).await.map_err(|e| e.to_string()),
                 None => Err("插件设置不完整".to_string()),
             };
             let ms = t0.elapsed().as_millis() as i64;
-            match r {
+            return match r {
                 Ok(c) => {
                     let detail = match c.expires_at {
                         Some(t) => format!("已登录，{} 后到期，会自动续期", fmt_duration(t - crate::ir::now_secs())),
                         None => "已登录".to_string(),
                     };
-                    steps.push(TestStep::new("auth", "登录", "ok", detail, ms));
+                    TestStep::new("auth", "登录", "ok", detail, ms)
                 }
-                Err(e) => {
-                    steps.push(TestStep::new("auth", "登录", "fail", e, ms));
-                    return done(steps);
-                }
-            }
-        } else if self.0.secrets.get(&keys::endpoint_api_key(&ep.id)).ok().flatten().is_some_and(|k| !k.is_empty()) {
-            steps.push(TestStep::new("auth", "鉴权", "ok", "已配置 API Key，下一步实际调用模型时验证", 0));
-        } else {
-            steps.push(TestStep::new("auth", "鉴权", "skip", "没有配置 API Key（服务不需要的话可以忽略）", 0));
-        }
-
-        // 3. 每个启用的模型发一句话
-        let models: Vec<_> = ep.models.iter().filter(|m| m.enabled).take(12).cloned().collect();
-        if models.is_empty() {
-            steps.push(TestStep::new("model", "模型", "fail", "还没有配置模型", 0));
-            return done(steps);
-        }
-        let results = futures::future::join_all(models.iter().map(|m| self.test_model(&cfg, &ep, m.clone()))).await;
-        for (m, r) in models.iter().zip(results) {
-            let detail = if r.ok {
-                format!("回复了「{}」", r.message)
-            } else if matches!(r.status, 401 | 403) {
-                format!("HTTP {}：{}（鉴权失败：检查 API Key 或登录状态、是否有这个模型的权限）", r.status, r.message)
-            } else if r.status == 404 {
-                format!("HTTP 404：{}（模型名可能不对）", r.message)
-            } else if r.status > 0 {
-                format!("HTTP {}：{}", r.status, r.message)
-            } else {
-                r.message.clone()
+                Err(e) => TestStep::new("auth", "登录", "fail", e, ms),
             };
-            steps.push(TestStep::new("model", &m.name, if r.ok { "ok" } else { "fail" }, detail, r.latency_ms));
         }
-        done(steps)
+        if self.0.secrets.get(&keys::endpoint_api_key(&ep.id)).ok().flatten().is_some_and(|k| !k.is_empty()) {
+            TestStep::new("auth", "鉴权", "ok", "已配置 API Key，下一步实际调用模型时验证", 0)
+        } else {
+            TestStep::new("auth", "鉴权", "skip", "没有配置 API Key（服务不需要的话可以忽略）", 0)
+        }
+    }
+
+    /// 第 3 步：给一个模型发一句话，看能否正常回复
+    pub async fn test_step_model(&self, endpoint_id: &str, model: &str) -> TestStep {
+        let cfg = self.config();
+        let Some(ep) = cfg.endpoint(endpoint_id).cloned() else {
+            return TestStep::new("model", model, "fail", "端点不存在，请先保存", 0);
+        };
+        let Some(m) = ep.models.iter().find(|m| m.name == model).cloned() else {
+            return TestStep::new("model", model, "fail", "端点里没有这个模型", 0);
+        };
+        let r = self.test_model(&cfg, &ep, m).await;
+        let detail = if r.ok {
+            format!("回复了「{}」", r.message)
+        } else if matches!(r.status, 401 | 403) {
+            format!("HTTP {}：{}（鉴权失败：检查 API Key 或登录状态、是否有这个模型的权限）", r.status, r.message)
+        } else if r.status == 404 {
+            format!("HTTP 404：{}（模型名可能不对）", r.message)
+        } else if r.status > 0 {
+            format!("HTTP {}：{}", r.status, r.message)
+        } else {
+            r.message.clone()
+        };
+        TestStep::new("model", model, if r.ok { "ok" } else { "fail" }, detail, r.latency_ms)
     }
 
     async fn test_model(&self, cfg: &Config, ep: &crate::config::EndpointConfig, m: crate::config::ModelConfig) -> TestResult {

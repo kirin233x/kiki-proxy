@@ -347,6 +347,9 @@ export const api = {
   testEndpoint: (id: string, model?: string) => invoke<TestResult>("test_endpoint", { id, model: model ?? null }),
   testProxy: (id: string) => invoke<TestResult>("test_proxy", { id }),
   testEndpointReport: (id: string) => invoke<TestReport>("test_endpoint_report", { id }),
+  /** 分步测试的单独一步：network / auth / model */
+  testStep: (id: string, step: "network" | "auth" | "model", model?: string) =>
+    invoke<TestStep>("test_step", { id, step, model: model ?? null }),
 
   pricingStatus: () => invoke<PricingStatus>("pricing_status"),
   refreshPricing: () => invoke<PricingStatus>("refresh_pricing"),

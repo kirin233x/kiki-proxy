@@ -330,6 +330,32 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
           ? { ok: false, status: 400, latencyMs: 412, message: "API key not valid. Please pass a valid API key." }
           : { ok: true, status: 200, latencyMs: 600 + Math.round(Math.random() * 900), message: "Hello" },
       );
+    case "test_step": {
+      const ep = config.endpoints.find((e) => e.id === args.id)!;
+      if (args.step === "network") {
+        await sleep(400);
+        return r(
+          ep.id === "gm"
+            ? { kind: "network", label: "网络", status: "fail", detail: "经Clash访问 generativelanguage.googleapis.com 失败：连接失败：Connection refused", ms: 3 }
+            : { kind: "network", label: "网络", status: "ok", detail: `经${ep.proxy === "direct" ? "直连" : "Clash"}访问 ${new URL(ep.baseUrl).host} 正常`, ms: 42 },
+        );
+      }
+      if (args.step === "auth") {
+        await sleep(700);
+        return r(
+          ep.plugin
+            ? { kind: "auth", label: "登录", status: "ok", detail: "已登录，2 小时后到期，会自动续期", ms: 0 }
+            : { kind: "auth", label: "鉴权", status: "ok", detail: "已配置 API Key，下一步实际调用模型时验证", ms: 0 },
+        );
+      }
+      const i = ep.models.findIndex((m) => m.name === args.model);
+      await sleep(800 + i * 1500);
+      return r(
+        ep.id === "internal" && i === 1
+          ? { kind: "model", label: args.model, status: "fail", detail: "HTTP 403：model not allowed for this user（鉴权失败：检查 API Key 或登录状态、是否有这个模型的权限）", ms: 310 }
+          : { kind: "model", label: args.model, status: "ok", detail: "回复了「Hello!」", ms: 800 + i * 1500 },
+      );
+    }
     case "test_endpoint_report": {
       await sleep(900);
       const ep = config.endpoints.find((e) => e.id === args.id)!;

@@ -76,7 +76,7 @@ npm run test:core
 
 ## 写插件
 
-见 [docs/PLUGINS.md](docs/PLUGINS.md)。简单来说：复制 `src-tauri/core/src/plugins/example.rs`（OpenAI Chat 格式 + 网页登录 + 自动续期），改成你们的逻辑，在 `plugins/mod.rs` 里注册一行，重新构建 App。
+见 [docs/PLUGINS.md](docs/PLUGINS.md)。让 AI 编码助手（本地模型等）来适配的话，让它先读 [src-tauri/core/src/plugins/README.md](src-tauri/core/src/plugins/README.md)，里面有完整的步骤、信息清单、接口说明和测试模板。简单来说：复制 `src-tauri/core/src/plugins/example.rs`（OpenAI Chat 格式 + 网页登录 + 自动续期），改成你们的逻辑，在 `plugins/mod.rs` 里注册一行，重新构建 App。
 
 ## 项目结构
 
