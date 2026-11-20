@@ -1,0 +1,1125 @@
+//! 网关：本地 HTTP 服务 + 请求处理主流程。
+//!
+//! 客户端请求 → 鉴权 → 路由（规则 / 前缀 / 默认模型）→ 故障切换链逐个尝试：
+//!   协议转换 → 插件（凭证、改写）→ 出口代理发送 → 鉴权失败则重新登录重试一次 →
+//!   失败且允许切换则换下一个 → 成功则（流式）转换响应回客户端协议 → 记日志
+
+use crate::auth::{CredentialStatus, Credentials};
+use crate::config::{Config, ConfigFile};
+use crate::ir::{estimate_tokens, new_id, now_millis, Message, Part, Protocol, Request, Role};
+use crate::plugin::{keys, FieldKind, Host, Plugin, PluginCtx, SecretStore, SettingField, UpstreamRequest, UpstreamResponse};
+use crate::protocol::{self, EncodeCtx, Normalizer};
+use crate::router::{self, Target, CLAUDE_ALIAS};
+use crate::sse::{SseEvent, SseParser};
+use crate::store::{Attempt, LogBodies, LogRecord, Store};
+use crate::upstream::{base_headers, mask_headers, upstream_url, Clients};
+use anyhow::{anyhow, Result};
+use axum::body::{Body, Bytes};
+use axum::extract::{Path as AxPath, RawQuery, State};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::Router;
+use futures::StreamExt;
+use parking_lot::RwLock;
+use serde::Serialize;
+use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::{broadcast, mpsc, oneshot};
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerStatus {
+    pub running: bool,
+    pub port: u16,
+    pub error: Option<String>,
+    pub started_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub settings: Vec<SettingField>,
+    pub uses_login: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestResult {
+    pub ok: bool,
+    pub status: u16,
+    pub latency_ms: i64,
+    pub message: String,
+}
+
+struct RunningServer {
+    shutdown: oneshot::Sender<()>,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+pub struct Inner {
+    dir: PathBuf,
+    config_file: ConfigFile,
+    config: RwLock<Arc<Config>>,
+    pub secrets: Arc<dyn SecretStore>,
+    pub host: Arc<dyn Host>,
+    plugins: Vec<Arc<dyn Plugin>>,
+    creds: Credentials,
+    clients: Clients,
+    store: Arc<Store>,
+    live: broadcast::Sender<LogRecord>,
+    server: tokio::sync::Mutex<Option<RunningServer>>,
+    status: RwLock<ServerStatus>,
+    janitor_started: std::sync::atomic::AtomicBool,
+}
+
+/// 网关句柄，可以随便 clone
+#[derive(Clone)]
+pub struct Gateway(Arc<Inner>);
+
+/// 一次尝试失败的原因
+struct Failure {
+    status: u16,
+    message: String,
+    /// 是否允许切到下一个备选
+    failover: bool,
+    /// 上游的原始错误响应（同协议时原样转给客户端）
+    raw: Option<(u16, Vec<u8>)>,
+}
+
+struct Prepared {
+    req: UpstreamRequest,
+    http: reqwest::Client,
+    plugin: Option<(Arc<dyn Plugin>, PluginCtx)>,
+    token: Option<String>,
+}
+
+impl Gateway {
+    pub fn new(dir: &Path, secrets: Arc<dyn SecretStore>, host: Arc<dyn Host>) -> Result<Self> {
+        let config_file = ConfigFile::new(dir);
+        let config = config_file.load().unwrap_or_else(|e| {
+            tracing::error!("读取配置失败，使用默认配置：{e}");
+            Config::default()
+        });
+        let store = Arc::new(Store::open(&dir.join("logs.db"))?);
+        Ok(Self::build(dir, config_file, config, store, secrets, host))
+    }
+
+    /// 测试用：内存数据库，不读写配置文件，可以额外注入插件
+    pub fn in_memory(config: Config, secrets: Arc<dyn SecretStore>, host: Arc<dyn Host>, extra_plugins: Vec<Arc<dyn Plugin>>) -> Result<Self> {
+        let dir = std::env::temp_dir().join(format!("kiki-test-{}", new_id("")));
+        let g = Self::build(&dir, ConfigFile::new(&dir), config, Arc::new(Store::memory()?), secrets, host);
+        let mut inner = Arc::try_unwrap(g.0).map_err(|_| anyhow!("unreachable"))?;
+        inner.plugins.extend(extra_plugins);
+        Ok(Gateway(Arc::new(inner)))
+    }
+
+    fn build(dir: &Path, config_file: ConfigFile, config: Config, store: Arc<Store>, secrets: Arc<dyn SecretStore>, host: Arc<dyn Host>) -> Self {
+        let (live, _) = broadcast::channel(256);
+        Gateway(Arc::new(Inner {
+            dir: dir.to_path_buf(),
+            config_file,
+            config: RwLock::new(Arc::new(config)),
+            creds: Credentials::new(secrets.clone()),
+            secrets,
+            host,
+            plugins: crate::plugins::registry(),
+            clients: Clients::default(),
+            store,
+            live,
+            server: tokio::sync::Mutex::new(None),
+            status: RwLock::new(ServerStatus::default()),
+            janitor_started: Default::default(),
+        }))
+    }
+
+    pub fn data_dir(&self) -> &Path {
+        &self.0.dir
+    }
+
+    pub fn config_path(&self) -> &Path {
+        self.0.config_file.path()
+    }
+
+    pub fn config(&self) -> Arc<Config> {
+        self.0.config.read().clone()
+    }
+
+    pub fn store(&self) -> &Store {
+        &self.0.store
+    }
+
+    pub fn secrets(&self) -> &dyn SecretStore {
+        &*self.0.secrets
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<LogRecord> {
+        self.0.live.subscribe()
+    }
+
+    pub fn status(&self) -> ServerStatus {
+        self.0.status.read().clone()
+    }
+
+    /// 保存配置；端口变了会自动重启服务
+    pub async fn save_config(&self, cfg: Config) -> Result<()> {
+        cfg.validate()?;
+        let old_port = self.config().server.port;
+        self.0.config_file.save(&cfg)?;
+        *self.0.config.write() = Arc::new(cfg.clone());
+        self.0.clients.clear();
+        if old_port != cfg.server.port && self.status().running {
+            self.stop().await;
+            self.start().await?;
+        }
+        Ok(())
+    }
+
+    /// 密钥改了（代理密码等）以后调用，让 HTTP 客户端重建
+    pub fn secrets_changed(&self) {
+        self.0.clients.clear();
+    }
+
+    // ------------------------------------------------------------------ 服务启停
+
+    pub async fn start(&self) -> Result<()> {
+        self.start_janitor();
+        let mut guard = self.0.server.lock().await;
+        if guard.is_some() {
+            return Ok(());
+        }
+        let port = self.config().server.port;
+        let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+            Ok(l) => l,
+            Err(e) => {
+                let msg = if e.kind() == std::io::ErrorKind::AddrInUse {
+                    format!("端口 {port} 已被其他程序占用，请在设置里换一个端口")
+                } else {
+                    format!("无法监听端口 {port}：{e}")
+                };
+                *self.0.status.write() = ServerStatus { running: false, port, error: Some(msg.clone()), started_at: 0 };
+                return Err(anyhow!(msg));
+            }
+        };
+        let app = self.router();
+        let (tx, rx) = oneshot::channel::<()>();
+        let handle = tokio::spawn(async move {
+            let _ = axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = rx.await;
+                })
+                .await;
+        });
+        *guard = Some(RunningServer { shutdown: tx, handle });
+        *self.0.status.write() = ServerStatus { running: true, port, error: None, started_at: now_millis() };
+        tracing::info!("kiki-proxy 网关已启动：http://127.0.0.1:{port}");
+        Ok(())
+    }
+
+    pub async fn stop(&self) {
+        let server = self.0.server.lock().await.take();
+        if let Some(s) = server {
+            let _ = s.shutdown.send(());
+            // 正在进行的流式请求最多等 3 秒
+            let abort = s.handle.abort_handle();
+            if tokio::time::timeout(Duration::from_secs(3), s.handle).await.is_err() {
+                abort.abort();
+            }
+        }
+        let port = self.config().server.port;
+        *self.0.status.write() = ServerStatus { running: false, port, error: None, started_at: 0 };
+    }
+
+    fn start_janitor(&self) {
+        if self.0.janitor_started.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        let g = self.clone();
+        tokio::spawn(async move {
+            loop {
+                let cfg = g.config();
+                let store = g.0.store.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    store.cleanup(cfg.logging.body_retention_hours, cfg.logging.stats_retention_days)
+                })
+                .await;
+                tokio::time::sleep(Duration::from_secs(1800)).await;
+            }
+        });
+    }
+
+    pub fn router(&self) -> Router {
+        Router::new()
+            .route("/", get(|| async { Json(json!({"name":"kiki-proxy","ok":true})) }))
+            .route("/api/hello", get(|| async { StatusCode::OK }).head(|| async { StatusCode::OK }))
+            .route("/v1/models", get(list_models))
+            .route("/models", get(list_models))
+            .route("/v1beta/models", get(list_gemini_models))
+            .route("/v1/messages", post(anthropic_messages))
+            .route("/v1/messages/count_tokens", post(anthropic_count_tokens))
+            .route("/v1/chat/completions", post(openai_chat))
+            .route("/chat/completions", post(openai_chat))
+            .route("/v1/responses", post(openai_responses))
+            .route("/responses", post(openai_responses))
+            .route("/v1beta/models/{*rest}", post(gemini))
+            .route("/v1/models/{*rest}", post(gemini))
+            .with_state(self.clone())
+    }
+
+    // ------------------------------------------------------------------ 插件与凭证
+
+    pub fn plugins(&self) -> Vec<PluginInfo> {
+        self.0
+            .plugins
+            .iter()
+            .map(|p| PluginInfo {
+                id: p.id().into(),
+                name: p.name().into(),
+                description: p.description().into(),
+                settings: p.settings(),
+                uses_login: p.uses_login(),
+            })
+            .collect()
+    }
+
+    fn plugin(&self, id: &str) -> Option<Arc<dyn Plugin>> {
+        self.0.plugins.iter().find(|p| p.id() == id).cloned()
+    }
+
+    fn plugin_ctx(
+        &self,
+        cfg: &Config,
+        endpoint_id: &str,
+        client: Option<Protocol>,
+        model: &str,
+        http: reqwest::Client,
+    ) -> Result<Option<(Arc<dyn Plugin>, PluginCtx)>> {
+        let ep = cfg.endpoint(endpoint_id).ok_or_else(|| anyhow!("端点「{endpoint_id}」不存在"))?;
+        if ep.plugin.is_empty() {
+            return Ok(None);
+        }
+        let plugin = self
+            .plugin(&ep.plugin)
+            .ok_or_else(|| anyhow!("端点「{}」使用的插件「{}」没有编译进当前版本", ep.name, ep.plugin))?;
+        let mut settings = std::collections::BTreeMap::new();
+        for f in plugin.settings() {
+            let v = if f.kind == FieldKind::Secret {
+                self.0.secrets.get(&keys::plugin_secret(&ep.id, &f.key)).ok().flatten().unwrap_or_default()
+            } else {
+                ep.plugin_settings.get(&f.key).cloned().unwrap_or_default()
+            };
+            settings.insert(f.key.clone(), if v.is_empty() { f.default.clone() } else { v });
+        }
+        // 插件声明之外的设置也带上，方便手写配置文件的人
+        for (k, v) in &ep.plugin_settings {
+            settings.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        let ctx = PluginCtx {
+            endpoint_id: ep.id.clone(),
+            endpoint_name: ep.name.clone(),
+            base_url: ep.base_url.clone(),
+            settings,
+            client_protocol: client,
+            upstream_protocol: ep.protocol,
+            model: model.to_string(),
+            http,
+            host: self.0.host.clone(),
+            secrets: self.0.secrets.clone(),
+        };
+        Ok(Some((plugin, ctx)))
+    }
+
+    /// 界面上点「登录」
+    pub async fn login(&self, endpoint_id: &str) -> Result<CredentialStatus> {
+        let cfg = self.config();
+        let ep = cfg.endpoint(endpoint_id).ok_or_else(|| anyhow!("端点不存在"))?;
+        let http = self.0.clients.get(&cfg, &ep.proxy, &*self.0.secrets)?;
+        let (plugin, ctx) = self.plugin_ctx(&cfg, endpoint_id, None, "", http)?.ok_or_else(|| anyhow!("这个端点没有使用插件"))?;
+        self.0.creds.login(&*plugin, &ctx).await?;
+        Ok(self.0.creds.status(endpoint_id))
+    }
+
+    pub fn logout(&self, endpoint_id: &str) {
+        self.0.creds.logout(endpoint_id);
+    }
+
+    pub fn credential_status(&self, endpoint_id: &str) -> CredentialStatus {
+        self.0.creds.status(endpoint_id)
+    }
+
+    // ------------------------------------------------------------------ 发送
+
+    #[allow(clippy::too_many_arguments)]
+    async fn prepare(
+        &self,
+        cfg: &Config,
+        target: &Target,
+        client: Option<Protocol>,
+        body: Value,
+        stream: bool,
+        client_headers: Option<&HeaderMap>,
+        count_tokens: bool,
+    ) -> Result<Prepared> {
+        let ep = &target.endpoint;
+        let http = self.0.clients.get(cfg, &target.proxy, &*self.0.secrets)?;
+        let api_key = self.0.secrets.get(&keys::endpoint_api_key(&ep.id)).ok().flatten().unwrap_or_default();
+        let mut headers = base_headers(ep, &api_key, stream)?;
+        // Claude Code → Anthropic 上游：带上 beta 开关（1M 上下文、交错思考等）
+        if client == Some(Protocol::Anthropic) && ep.protocol == Protocol::Anthropic {
+            if let Some(h) = client_headers {
+                for name in ["anthropic-beta", "anthropic-version"] {
+                    if let Some(v) = h.get(name) {
+                        headers.insert(name, v.clone());
+                    }
+                }
+            }
+        }
+        let url = upstream_url(&ep.base_url, ep.protocol, &target.upstream_model, stream, count_tokens);
+        let mut req = UpstreamRequest { method: reqwest::Method::POST, url, headers, body, raw_body: None };
+        let mut token = None;
+        let plugin = self.plugin_ctx(cfg, &ep.id, client, &target.upstream_model, http.clone())?;
+        if let Some((p, ctx)) = &plugin {
+            if p.uses_login() {
+                let cred = self.0.creds.get(&**p, ctx).await?;
+                p.apply_credential(&cred, &mut req)?;
+                token = Some(cred.token);
+            }
+            p.on_request(ctx, &mut req).await?;
+        }
+        Ok(Prepared { req, http, plugin, token })
+    }
+
+    async fn send(&self, p: &Prepared, timeout_secs: u64, fo: &crate::config::FailoverConfig) -> Result<reqwest::Response, Failure> {
+        let fut = p.http.request(p.req.method.clone(), &p.req.url).headers(p.req.headers.clone()).body(p.req.body_bytes()).send();
+        match tokio::time::timeout(Duration::from_secs(timeout_secs.max(5)), fut).await {
+            Err(_) => Err(Failure {
+                status: 504,
+                message: format!("等待上游响应超时（{timeout_secs} 秒）"),
+                failover: fo.on_timeout,
+                raw: None,
+            }),
+            Ok(Err(e)) => Err(Failure { status: 502, message: describe_reqwest_error(&e), failover: fo.on_connect_error, raw: None }),
+            Ok(Ok(r)) => Ok(r),
+        }
+    }
+
+    // ------------------------------------------------------------------ 主流程
+
+    pub async fn handle(
+        &self,
+        client: Protocol,
+        path: &str,
+        headers: HeaderMap,
+        query: Option<String>,
+        body: Bytes,
+        gemini: Option<(String, String)>,
+    ) -> Response {
+        let cfg = self.config();
+        let started = Instant::now();
+        if let Err(r) = check_access(&cfg, &headers, query.as_deref(), client) {
+            return r;
+        }
+        let json: Value = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => return error_response(client, 400, &format!("请求体不是合法的 JSON：{e}")),
+        };
+        let (requested, stream) = match &gemini {
+            Some((m, action)) => (m.clone(), action == "streamGenerateContent"),
+            None => (
+                json.get("model").and_then(Value::as_str).unwrap_or("").to_string(),
+                json.get("stream").and_then(Value::as_bool).unwrap_or(false),
+            ),
+        };
+        let max_kb = cfg.logging.max_body_kb;
+        let mut rec = LogRecord {
+            id: new_id(""),
+            ts: now_millis(),
+            client_protocol: client.label().into(),
+            path: path.into(),
+            requested_model: requested.clone(),
+            stream,
+            ..Default::default()
+        };
+        let mut bodies = LogBodies { client_request: cap(&body, max_kb), client_headers: mask_headers(&headers), ..Default::default() };
+
+        let chain = match router::resolve(&cfg, &requested, client) {
+            Ok(first) => router::failover_chain(&cfg, first),
+            Err(e) => {
+                rec.status = 404;
+                rec.error = e.to_string();
+                rec.duration_ms = started.elapsed().as_millis() as i64;
+                self.log(rec, Some(bodies));
+                return error_response(client, 404, &e.to_string());
+            }
+        };
+
+        let mut ir: Option<Request> = None;
+        let total = chain.len();
+        'targets: for (i, target) in chain.into_iter().enumerate() {
+            let last = i + 1 == total;
+            let ep = target.endpoint.clone();
+            let up = ep.protocol;
+            rec.gateway_model = target.gateway_model.clone();
+            rec.endpoint_id = ep.id.clone();
+            rec.endpoint_name = ep.name.clone();
+            rec.upstream_model = target.upstream_model.clone();
+            rec.upstream_protocol = up.label().into();
+            rec.proxy = target.proxy.clone();
+            rec.rule = target.rule.clone().unwrap_or_default();
+
+            // 1. 请求体：同协议透传（只换模型名），否则经 IR 转换
+            let up_body = if up == client {
+                let mut b = json.clone();
+                if up != Protocol::Gemini {
+                    b["model"] = json!(target.upstream_model);
+                }
+                b
+            } else {
+                if ir.is_none() {
+                    let mut src = json.clone();
+                    if client == Protocol::Gemini {
+                        src["model"] = json!(requested);
+                    }
+                    match protocol::parse_request(client, &src) {
+                        Ok(mut r) => {
+                            r.stream = stream;
+                            ir = Some(r);
+                        }
+                        Err(e) => return error_response(client, 400, &format!("无法解析请求：{e}")),
+                    }
+                }
+                protocol::build_request(up, ir.as_ref().unwrap(), &target.upstream_model, &ep.compat)
+            };
+
+            let attempt_start = Instant::now();
+            let mut auth_retried = false;
+            loop {
+                let fail = |rec: &mut LogRecord, f: &Failure| {
+                    rec.attempts.push(Attempt {
+                        gateway_model: target.gateway_model.clone(),
+                        endpoint: ep.name.clone(),
+                        status: f.status,
+                        error: f.message.chars().take(600).collect(),
+                        duration_ms: attempt_start.elapsed().as_millis() as i64,
+                    });
+                };
+
+                // 2. 插件、鉴权、出口代理
+                let prep = match self.prepare(&cfg, &target, Some(client), up_body.clone(), stream, Some(&headers), false).await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let f = Failure { status: 502, message: format!("[{}] {e}", ep.name), failover: cfg.failover.on_connect_error, raw: None };
+                        fail(&mut rec, &f);
+                        if f.failover && !last {
+                            continue 'targets;
+                        }
+                        return self.final_failure(client, up, rec, bodies, f, started);
+                    }
+                };
+                bodies.upstream_url = prep.req.url.clone();
+                bodies.upstream_headers = mask_headers(&prep.req.headers);
+                bodies.upstream_request = cap(&prep.req.body_bytes(), max_kb);
+
+                // 3. 发送
+                let resp = match self.send(&prep, ep.timeout_secs, &cfg.failover).await {
+                    Ok(r) => r,
+                    Err(mut f) => {
+                        f.message = format!("[{}] {}", ep.name, f.message);
+                        fail(&mut rec, &f);
+                        if f.failover && !last {
+                            continue 'targets;
+                        }
+                        return self.final_failure(client, up, rec, bodies, f, started);
+                    }
+                };
+                let status = resp.status().as_u16();
+                let resp_headers = resp.headers().clone();
+                let is_sse = resp_headers
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .is_some_and(|c| c.contains("event-stream"));
+                rec.ttfb_ms = started.elapsed().as_millis() as i64;
+
+                // 4a. 流式成功：边收边转
+                if (200..300).contains(&status) && stream && is_sse {
+                    return self.respond_stream(client, up, &requested, ir.as_ref(), prep, resp, rec, bodies, started, &target);
+                }
+
+                // 4b. 其余情况：读完整个响应
+                let raw = match resp.bytes().await {
+                    Ok(b) => b.to_vec(),
+                    Err(e) => {
+                        let f = Failure {
+                            status: 502,
+                            message: format!("[{}] 读取上游响应失败：{}", ep.name, describe_reqwest_error(&e)),
+                            failover: cfg.failover.on_connect_error,
+                            raw: None,
+                        };
+                        fail(&mut rec, &f);
+                        if f.failover && !last {
+                            continue 'targets;
+                        }
+                        return self.final_failure(client, up, rec, bodies, f, started);
+                    }
+                };
+                let mut ur = UpstreamResponse { status, headers: resp_headers, body: raw };
+                if let Some((p, ctx)) = &prep.plugin {
+                    if p.uses_login() && !auth_retried && p.is_auth_failure(ur.status, &ur.body) {
+                        // 凭证失效：作废后重新登录，同一个目标再试一次
+                        if let Some(t) = &prep.token {
+                            self.0.creds.invalidate(&ep.id, t);
+                        }
+                        auth_retried = true;
+                        bodies.upstream_response = cap(&ur.body, max_kb);
+                        continue;
+                    }
+                    if let Err(e) = p.on_response(ctx, &mut ur).await {
+                        let f = Failure { status: 502, message: format!("[{}] 插件处理响应失败：{e}", ep.name), failover: false, raw: None };
+                        fail(&mut rec, &f);
+                        return self.final_failure(client, up, rec, bodies, f, started);
+                    }
+                }
+                bodies.upstream_status = ur.status;
+                bodies.upstream_response = cap(&ur.body, max_kb);
+
+                if !(200..300).contains(&ur.status) {
+                    let f = Failure {
+                        status: ur.status,
+                        message: format!("[{}] {}", ep.name, protocol::error_message(&ur.body)),
+                        failover: cfg.failover.should_failover_status(ur.status),
+                        raw: Some((ur.status, ur.body.clone())),
+                    };
+                    fail(&mut rec, &f);
+                    if f.failover && !last {
+                        continue 'targets;
+                    }
+                    return self.final_failure(client, up, rec, bodies, f, started);
+                }
+                return self.respond_full(client, up, &requested, ir.as_ref(), stream, ur.body, rec, bodies, started, &target);
+            }
+        }
+        // chain 至少有一个元素，走不到这里
+        error_response(client, 500, "没有可用的上游")
+    }
+
+    fn final_failure(&self, client: Protocol, up: Protocol, mut rec: LogRecord, bodies: LogBodies, f: Failure, started: Instant) -> Response {
+        rec.status = f.status;
+        rec.error = f.message.clone();
+        rec.duration_ms = started.elapsed().as_millis() as i64;
+        let resp = match f.raw {
+            // 同协议：把上游的错误原样给客户端，信息最完整
+            Some((status, body)) if up == client => raw_response(status, body, "application/json"),
+            _ => {
+                let msg = if rec.attempts.len() > 1 {
+                    let tried: Vec<String> = rec.attempts.iter().map(|a| a.gateway_model.clone()).collect();
+                    format!("{}（已依次尝试：{}）", f.message, tried.join(" → "))
+                } else {
+                    f.message.clone()
+                };
+                error_response(client, f.status, &msg)
+            }
+        };
+        self.log(rec, Some(bodies));
+        resp
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn respond_full(
+        &self,
+        client: Protocol,
+        up: Protocol,
+        requested: &str,
+        ir: Option<&Request>,
+        stream: bool,
+        body: Vec<u8>,
+        mut rec: LogRecord,
+        mut bodies: LogBodies,
+        started: Instant,
+        target: &Target,
+    ) -> Response {
+        let max_kb = self.config().logging.max_body_kb;
+        let parsed = serde_json::from_slice::<Value>(&body).map_err(anyhow::Error::from).and_then(|v| protocol::parse_response(up, &v));
+        let ectx = EncodeCtx::new(requested, ir);
+        let resp = if up == client && !stream {
+            if let Ok(r) = &parsed {
+                rec.usage = r.usage;
+            }
+            raw_response(200, body, "application/json")
+        } else {
+            let r = match parsed {
+                Ok(r) => r,
+                Err(e) => {
+                    let f = Failure { status: 502, message: format!("无法解析上游响应：{e}"), failover: false, raw: None };
+                    return self.final_failure(client, up, rec, bodies, f, started);
+                }
+            };
+            rec.usage = r.usage;
+            if stream {
+                // 客户端要流式但上游给了完整 JSON：拆成事件再编码
+                let mut norm = Normalizer::new(requested);
+                let mut enc = protocol::encoder(client, ectx);
+                let mut out = String::new();
+                for ev in protocol::response_to_events(&r) {
+                    for e in norm.push(ev) {
+                        enc.encode(&e).iter().for_each(|s| out.push_str(&s.to_bytes()));
+                    }
+                }
+                for e in norm.end() {
+                    enc.encode(&e).iter().for_each(|s| out.push_str(&s.to_bytes()));
+                }
+                bodies.client_response = cap(out.as_bytes(), max_kb);
+                sse_response(Body::from(out))
+            } else {
+                let v = protocol::build_response(client, &r, &ectx);
+                let bytes = serde_json::to_vec(&v).unwrap_or_default();
+                bodies.client_response = cap(&bytes, max_kb);
+                raw_response(200, bytes, "application/json")
+            }
+        };
+        rec.status = 200;
+        rec.duration_ms = started.elapsed().as_millis() as i64;
+        rec.cost = target.model.as_ref().map(|m| m.price.cost(&rec.usage)).unwrap_or(0.0);
+        self.log(rec, Some(bodies));
+        resp
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn respond_stream(
+        &self,
+        client: Protocol,
+        up: Protocol,
+        requested: &str,
+        ir: Option<&Request>,
+        prep: Prepared,
+        resp: reqwest::Response,
+        mut rec: LogRecord,
+        mut bodies: LogBodies,
+        started: Instant,
+        target: &Target,
+    ) -> Response {
+        let (tx, rx) = mpsc::channel::<Bytes>(64);
+        let passthrough = up == client;
+        let mut norm = Normalizer::new(requested);
+        let mut dec = protocol::decoder(up);
+        let mut enc = protocol::encoder(client, EncodeCtx::new(requested, ir));
+        let price = target.model.as_ref().map(|m| m.price.clone()).unwrap_or_default();
+        let max_bytes = self.config().logging.max_body_kb as usize * 1024;
+        let g = self.clone();
+        bodies.upstream_status = resp.status().as_u16();
+
+        // 进行中的请求先推给界面
+        let mut pending = rec.clone();
+        pending.pending = true;
+        pending.status = 200;
+        let _ = self.0.live.send(pending);
+
+        tokio::spawn(async move {
+            let mut parser = SseParser::new();
+            let mut up_log = String::new();
+            let mut client_log = String::new();
+            let mut upstream = resp.bytes_stream();
+            let mut client_gone = false;
+            let mut stream_error: Option<String> = None;
+
+            // 处理一个上游 SSE 事件，返回要发给客户端的字节
+            let mut handle_event = |ev: SseEvent, norm: &mut Normalizer, out: &mut String| {
+                let evs = match &prep.plugin {
+                    Some((p, ctx)) => p.on_stream_event(ctx, ev),
+                    None => vec![ev],
+                };
+                for ev in evs {
+                    if passthrough {
+                        out.push_str(&ev.to_bytes());
+                        for e in dec.feed(&ev) {
+                            norm.push(e); // 只为了统计 usage
+                        }
+                    } else {
+                        for e in dec.feed(&ev) {
+                            for ne in norm.push(e) {
+                                enc.encode(&ne).iter().for_each(|s| out.push_str(&s.to_bytes()));
+                            }
+                        }
+                    }
+                }
+            };
+
+            loop {
+                // 上游 5 分钟没有任何数据视为断流
+                let next = match tokio::time::timeout(Duration::from_secs(300), upstream.next()).await {
+                    Ok(n) => n,
+                    Err(_) => {
+                        stream_error = Some("上游 5 分钟没有返回数据，已断开".into());
+                        break;
+                    }
+                };
+                let Some(chunk) = next else { break };
+                let chunk = match chunk {
+                    Ok(c) => c,
+                    Err(e) => {
+                        stream_error = Some(format!("上游连接中断：{}", describe_reqwest_error(&e)));
+                        break;
+                    }
+                };
+                if up_log.len() < max_bytes {
+                    up_log.push_str(&String::from_utf8_lossy(&chunk));
+                }
+                let mut out = String::new();
+                for ev in parser.feed(&chunk) {
+                    handle_event(ev, &mut norm, &mut out);
+                }
+                if !out.is_empty() {
+                    if client_log.len() < max_bytes {
+                        client_log.push_str(&out);
+                    }
+                    if tx.send(Bytes::from(out)).await.is_err() {
+                        client_gone = true;
+                        break;
+                    }
+                }
+            }
+
+            // 收尾：解析器里剩下的、解码器的结束事件、规范化器补齐
+            let mut out = String::new();
+            if !client_gone {
+                for ev in parser.finish() {
+                    handle_event(ev, &mut norm, &mut out);
+                }
+                if passthrough {
+                    for e in dec.finish() {
+                        norm.push(e);
+                    }
+                } else {
+                    let mut tail = dec.finish();
+                    if let Some(msg) = &stream_error {
+                        tail.push(crate::ir::Event::Error { message: msg.clone() });
+                    }
+                    for e in tail {
+                        for ne in norm.push(e) {
+                            enc.encode(&ne).iter().for_each(|s| out.push_str(&s.to_bytes()));
+                        }
+                    }
+                    for ne in norm.end() {
+                        enc.encode(&ne).iter().for_each(|s| out.push_str(&s.to_bytes()));
+                    }
+                }
+                if !out.is_empty() {
+                    client_log.push_str(&out);
+                    let _ = tx.send(Bytes::from(out)).await;
+                }
+            }
+            drop(tx);
+
+            rec.usage = norm.usage;
+            rec.cost = price.cost(&rec.usage);
+            rec.duration_ms = started.elapsed().as_millis() as i64;
+            rec.status = 200;
+            if let Some(e) = stream_error.or(norm.error.clone()) {
+                rec.status = 502;
+                rec.error = e;
+            } else if client_gone {
+                rec.error = "客户端提前断开".into();
+            }
+            bodies.upstream_response = truncate_str(up_log, max_bytes);
+            bodies.client_response = if passthrough { "（与上游响应相同，透传）".into() } else { truncate_str(client_log, max_bytes) };
+            g.log(rec, Some(bodies));
+        });
+
+        let body_stream = futures::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|b| (Ok::<_, std::convert::Infallible>(b), rx)) });
+        sse_response(Body::from_stream(body_stream))
+    }
+
+    fn log(&self, rec: LogRecord, bodies: Option<LogBodies>) {
+        let _ = self.0.live.send(rec.clone());
+        let store = self.0.store.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = store.insert(&rec, bodies.as_ref()) {
+                tracing::warn!("写日志失败：{e}");
+            }
+        });
+    }
+
+    // ------------------------------------------------------------------ count_tokens
+
+    async fn count_tokens(&self, client: Protocol, headers: HeaderMap, query: Option<String>, body: Bytes, model: Option<String>) -> Response {
+        let cfg = self.config();
+        if let Err(r) = check_access(&cfg, &headers, query.as_deref(), client) {
+            return r;
+        }
+        let mut json: Value = serde_json::from_slice(&body).unwrap_or_default();
+        if let Some(m) = &model {
+            json["model"] = json!(m);
+        }
+        let requested = json.get("model").and_then(Value::as_str).unwrap_or("").to_string();
+        // Anthropic 上游有真正的 count_tokens 接口，直接转发
+        if client == Protocol::Anthropic {
+            if let Ok(t) = router::resolve(&cfg, &requested, client) {
+                if t.endpoint.protocol == Protocol::Anthropic {
+                    let mut b = json.clone();
+                    b["model"] = json!(t.upstream_model);
+                    if let Ok(p) = self.prepare(&cfg, &t, Some(client), b, false, Some(&headers), true).await {
+                        if let Ok(r) = self.send(&p, 30, &cfg.failover).await {
+                            if r.status().is_success() {
+                                if let Ok(bytes) = r.bytes().await {
+                                    return raw_response(200, bytes.to_vec(), "application/json");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let n = protocol::parse_request(client, &json).map(|r| estimate_tokens(&r)).unwrap_or(1);
+        match client {
+            Protocol::Gemini => Json(json!({ "totalTokens": n })).into_response(),
+            _ => Json(json!({ "input_tokens": n })).into_response(),
+        }
+    }
+
+    // ------------------------------------------------------------------ 测试
+
+    /// 用一个最小请求测试端点是否可用
+    pub async fn test_endpoint(&self, endpoint_id: &str, model: Option<String>) -> TestResult {
+        let cfg = self.config();
+        let Some(ep) = cfg.endpoint(endpoint_id).cloned() else {
+            return TestResult { message: "端点不存在".into(), ..Default::default() };
+        };
+        let m = match model.filter(|m| !m.is_empty()) {
+            Some(m) => ep.models.iter().find(|x| x.name == m).cloned(),
+            None => ep.models.iter().find(|x| x.enabled).cloned(),
+        };
+        let Some(m) = m else {
+            return TestResult { message: "这个端点还没有配置模型".into(), ..Default::default() };
+        };
+        let target = Target {
+            gateway_model: format!("{}/{}", ep.id, m.name),
+            upstream_model: m.upstream_id().to_string(),
+            proxy: ep.proxy.clone(),
+            model: Some(m),
+            endpoint: ep.clone(),
+            rule: None,
+        };
+        let ir = Request {
+            model: target.upstream_model.clone(),
+            messages: vec![Message { role: Role::User, content: vec![Part::Text("Hi, reply with one word.".into())] }],
+            max_tokens: Some(32),
+            ..Default::default()
+        };
+        let body = protocol::build_request(ep.protocol, &ir, &target.upstream_model, &ep.compat);
+        let t0 = Instant::now();
+        let prep = match self.prepare(&cfg, &target, None, body, false, None, false).await {
+            Ok(p) => p,
+            Err(e) => return TestResult { message: e.to_string(), ..Default::default() },
+        };
+        let resp = match self.send(&prep, ep.timeout_secs.min(60), &cfg.failover).await {
+            Ok(r) => r,
+            Err(f) => return TestResult { status: f.status, message: f.message, latency_ms: t0.elapsed().as_millis() as i64, ok: false },
+        };
+        let status = resp.status().as_u16();
+        let mut ur = UpstreamResponse { status, headers: resp.headers().clone(), body: resp.bytes().await.map(|b| b.to_vec()).unwrap_or_default() };
+        let latency_ms = t0.elapsed().as_millis() as i64;
+        if let Some((p, ctx)) = &prep.plugin {
+            let _ = p.on_response(ctx, &mut ur).await;
+        }
+        if !(200..300).contains(&status) {
+            return TestResult { ok: false, status, latency_ms, message: protocol::error_message(&ur.body) };
+        }
+        let reply = serde_json::from_slice::<Value>(&ur.body)
+            .ok()
+            .and_then(|v| protocol::parse_response(ep.protocol, &v).ok())
+            .map(|r| crate::ir::parts_text(&r.content))
+            .unwrap_or_default();
+        TestResult { ok: true, status, latency_ms, message: if reply.is_empty() { "可用".into() } else { reply.chars().take(80).collect() } }
+    }
+
+    /// 测试出口代理：访问探测地址
+    pub async fn test_proxy(&self, proxy_id: &str) -> TestResult {
+        let cfg = self.config();
+        let http = match self.0.clients.get(&cfg, proxy_id, &*self.0.secrets) {
+            Ok(c) => c,
+            Err(e) => return TestResult { message: e.to_string(), ..Default::default() },
+        };
+        let t0 = Instant::now();
+        match tokio::time::timeout(Duration::from_secs(15), http.get(&cfg.ui.probe_url).send()).await {
+            Err(_) => TestResult { message: "超时（15 秒）".into(), latency_ms: 15000, ..Default::default() },
+            Ok(Err(e)) => TestResult { message: describe_reqwest_error(&e), latency_ms: t0.elapsed().as_millis() as i64, ..Default::default() },
+            Ok(Ok(r)) => {
+                let status = r.status().as_u16();
+                TestResult {
+                    ok: status < 500,
+                    status,
+                    latency_ms: t0.elapsed().as_millis() as i64,
+                    message: format!("HTTP {status}"),
+                }
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------------ axum 处理函数
+
+struct Json(Value);
+
+impl IntoResponse for Json {
+    fn into_response(self) -> Response {
+        raw_response(200, serde_json::to_vec(&self.0).unwrap_or_default(), "application/json")
+    }
+}
+
+async fn anthropic_messages(State(g): State<Gateway>, headers: HeaderMap, RawQuery(q): RawQuery, body: Bytes) -> Response {
+    g.handle(Protocol::Anthropic, "/v1/messages", headers, q, body, None).await
+}
+
+async fn anthropic_count_tokens(State(g): State<Gateway>, headers: HeaderMap, RawQuery(q): RawQuery, body: Bytes) -> Response {
+    g.count_tokens(Protocol::Anthropic, headers, q, body, None).await
+}
+
+async fn openai_chat(State(g): State<Gateway>, headers: HeaderMap, RawQuery(q): RawQuery, body: Bytes) -> Response {
+    g.handle(Protocol::OpenaiChat, "/v1/chat/completions", headers, q, body, None).await
+}
+
+async fn openai_responses(State(g): State<Gateway>, headers: HeaderMap, RawQuery(q): RawQuery, body: Bytes) -> Response {
+    g.handle(Protocol::OpenaiResponses, "/v1/responses", headers, q, body, None).await
+}
+
+async fn gemini(State(g): State<Gateway>, AxPath(rest): AxPath<String>, headers: HeaderMap, RawQuery(q): RawQuery, body: Bytes) -> Response {
+    // rest 形如 `ds/deepseek-chat:streamGenerateContent`（模型名里可能有 /）
+    let Some((model, action)) = rest.rsplit_once(':') else {
+        return error_response(Protocol::Gemini, 404, "未知的 Gemini 接口");
+    };
+    let model = model.strip_prefix("models/").unwrap_or(model).to_string();
+    match action {
+        "generateContent" | "streamGenerateContent" => {
+            g.handle(Protocol::Gemini, &format!("/v1beta/models/{rest}"), headers, q, body, Some((model, action.to_string()))).await
+        }
+        "countTokens" => g.count_tokens(Protocol::Gemini, headers, q, body, Some(model)).await,
+        _ => error_response(Protocol::Gemini, 404, &format!("不支持的 Gemini 接口：{action}")),
+    }
+}
+
+async fn list_models(State(g): State<Gateway>, headers: HeaderMap) -> Response {
+    let cfg = g.config();
+    // Claude Code 的模型发现只保留名字里带 claude / anthropic 的模型
+    let for_claude = headers.contains_key("anthropic-version") && cfg.routing.claude_alias;
+    let created = crate::ir::now_secs();
+    let data: Vec<Value> = router::list_models(&cfg)
+        .into_iter()
+        .map(|m| {
+            let lower = m.id.to_lowercase();
+            let id = if for_claude && !lower.contains("claude") && !lower.contains("anthropic") {
+                format!("{CLAUDE_ALIAS}{}", m.id)
+            } else {
+                m.id.clone()
+            };
+            json!({
+                "id": id, "object": "model", "type": "model", "created": created,
+                "created_at": "2025-01-01T00:00:00Z", "owned_by": m.endpoint,
+                "display_name": m.display_name, "description": format!("{} · kiki-proxy", m.endpoint),
+            })
+        })
+        .collect();
+    let first = data.first().and_then(|d| d.get("id")).cloned().unwrap_or(Value::Null);
+    let last = data.last().and_then(|d| d.get("id")).cloned().unwrap_or(Value::Null);
+    Json(json!({ "object": "list", "data": data, "has_more": false, "first_id": first, "last_id": last })).into_response()
+}
+
+async fn list_gemini_models(State(g): State<Gateway>) -> Response {
+    let models: Vec<Value> = router::list_models(&g.config())
+        .into_iter()
+        .map(|m| {
+            json!({
+                "name": format!("models/{}", m.id), "displayName": m.display_name,
+                "supportedGenerationMethods": ["generateContent", "streamGenerateContent", "countTokens"],
+            })
+        })
+        .collect();
+    Json(json!({ "models": models })).into_response()
+}
+
+// ------------------------------------------------------------------ 小工具
+
+#[allow(clippy::result_large_err)]
+fn check_access(cfg: &Config, headers: &HeaderMap, query: Option<&str>, client: Protocol) -> Result<(), Response> {
+    let key = cfg.server.access_key.trim();
+    if key.is_empty() {
+        return Ok(());
+    }
+    let h = |n: &str| headers.get(n).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let provided = h("x-api-key")
+        .or_else(|| h("authorization").map(|a| a.trim_start_matches("Bearer ").trim().to_string()))
+        .or_else(|| h("x-goog-api-key"))
+        .or_else(|| {
+            query.and_then(|q| url::form_urlencoded::parse(q.as_bytes()).find(|(k, _)| k == "key").map(|(_, v)| v.to_string()))
+        });
+    if provided.as_deref() == Some(key) {
+        Ok(())
+    } else {
+        Err(error_response(client, 401, "kiki-proxy 访问密钥不正确"))
+    }
+}
+
+pub fn error_response(client: Protocol, status: u16, message: &str) -> Response {
+    let body = protocol::error_body(client, status, message);
+    raw_response(status, serde_json::to_vec(&body).unwrap_or_default(), "application/json")
+}
+
+fn raw_response(status: u16, body: Vec<u8>, content_type: &str) -> Response {
+    let mut r = Response::new(Body::from(body));
+    *r.status_mut() = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+    r.headers_mut().insert("content-type", HeaderValue::from_str(content_type).unwrap_or(HeaderValue::from_static("application/json")));
+    r
+}
+
+fn sse_response(body: Body) -> Response {
+    let mut r = Response::new(body);
+    let h = r.headers_mut();
+    h.insert("content-type", HeaderValue::from_static("text/event-stream; charset=utf-8"));
+    h.insert("cache-control", HeaderValue::from_static("no-cache"));
+    h.insert("x-accel-buffering", HeaderValue::from_static("no"));
+    r
+}
+
+fn describe_reqwest_error(e: &reqwest::Error) -> String {
+    use std::error::Error as _;
+    let mut msg = if e.is_connect() {
+        "连接失败".to_string()
+    } else if e.is_timeout() {
+        "超时".to_string()
+    } else if e.is_body() || e.is_decode() {
+        "读取响应失败".to_string()
+    } else {
+        "请求失败".to_string()
+    };
+    let mut src = e.source();
+    let mut detail = Vec::new();
+    while let Some(s) = src {
+        detail.push(s.to_string());
+        src = s.source();
+    }
+    if let Some(d) = detail.last() {
+        msg.push('：');
+        msg.push_str(d);
+    }
+    msg
+}
+
+fn cap(bytes: &[u8], max_kb: u32) -> String {
+    truncate_str(String::from_utf8_lossy(bytes).to_string(), max_kb as usize * 1024)
+}
+
+fn truncate_str(mut s: String, max: usize) -> String {
+    if s.len() > max {
+        let mut cut = max;
+        while !s.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let total = s.len();
+        s.truncate(cut);
+        s.push_str(&format!("\n…（已截断，原始大小 {} KB）", total / 1024));
+    }
+    s
+}
