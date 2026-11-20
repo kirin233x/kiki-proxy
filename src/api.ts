@@ -1,0 +1,367 @@
+// 与 Rust 后端通信的类型与方法。
+// 在浏览器里直接 `npm run dev` 时（没有 Tauri 环境），自动使用 mock 数据，方便调试界面。
+
+export type Protocol = "anthropic" | "openai_chat" | "openai_responses" | "gemini";
+export type AuthMode = "auto" | "bearer" | "x_api_key" | "goog_api_key" | "none";
+export type ProxyKind = "http" | "socks5";
+
+export const PROTOCOLS: { value: Protocol; label: string; hint: string }[] = [
+  { value: "anthropic", label: "Anthropic", hint: "/v1/messages · Claude Code" },
+  { value: "openai_chat", label: "OpenAI Chat", hint: "/v1/chat/completions · 大部分兼容服务" },
+  { value: "openai_responses", label: "OpenAI Responses", hint: "/v1/responses · Codex" },
+  { value: "gemini", label: "Gemini", hint: "/v1beta/models · Gemini CLI" },
+];
+
+export const protocolLabel = (p: Protocol | string) => PROTOCOLS.find((x) => x.value === p)?.label ?? p;
+
+export interface Compat {
+  sendReasoningContent: boolean;
+  useMaxCompletionTokens: boolean;
+  sendReasoningEffort: boolean;
+  dropSamplingParams: boolean;
+}
+
+export interface Price {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+export interface ModelConfig {
+  name: string;
+  upstream: string;
+  displayName: string;
+  enabled: boolean;
+  vision: boolean;
+  price: Price;
+  fallbacks: string[];
+}
+
+export interface EndpointConfig {
+  id: string;
+  name: string;
+  enabled: boolean;
+  protocol: Protocol;
+  baseUrl: string;
+  auth: AuthMode;
+  proxy: string;
+  plugin: string;
+  pluginSettings: Record<string, string>;
+  headers: Record<string, string>;
+  timeoutSecs: number;
+  compat: Compat;
+  models: ModelConfig[];
+  fallbacks: string[];
+  note: string;
+}
+
+export interface ProxyConfig {
+  id: string;
+  name: string;
+  kind: ProxyKind;
+  url: string;
+  username: string;
+}
+
+export interface RuleConfig {
+  id: string;
+  name: string;
+  enabled: boolean;
+  pattern: string;
+  client: Protocol | null;
+  target: string;
+  proxy: string;
+}
+
+export interface Config {
+  server: { port: number; accessKey: string };
+  routing: { defaultModel: string; claudeAlias: boolean };
+  failover: { onConnectError: boolean; onTimeout: boolean; on5xx: boolean; on429: boolean; extraStatus: number[] };
+  logging: { bodyRetentionHours: number; statsRetentionDays: number; maxBodyKb: number };
+  ui: { theme: "auto" | "light" | "dark"; probeUrl: string };
+  proxies: ProxyConfig[];
+  endpoints: EndpointConfig[];
+  rules: RuleConfig[];
+}
+
+export interface ServerStatus {
+  running: boolean;
+  port: number;
+  error: string | null;
+  startedAt: number;
+}
+
+export interface SettingField {
+  key: string;
+  label: string;
+  help: string;
+  kind: "text" | "secret" | "url" | "multiline";
+  default: string;
+  required: boolean;
+}
+
+export interface PluginInfo {
+  id: string;
+  name: string;
+  description: string;
+  settings: SettingField[];
+  usesLogin: boolean;
+}
+
+export interface CredentialStatus {
+  loggedIn: boolean;
+  expiresAt: number | null;
+  expired: boolean;
+}
+
+export interface TestResult {
+  ok: boolean;
+  status: number;
+  latencyMs: number;
+  message: string;
+}
+
+export interface Usage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+export interface Attempt {
+  gatewayModel: string;
+  endpoint: string;
+  status: number;
+  error: string;
+  durationMs: number;
+}
+
+export interface LogRecord {
+  id: string;
+  ts: number;
+  clientProtocol: string;
+  path: string;
+  requestedModel: string;
+  gatewayModel: string;
+  endpointId: string;
+  endpointName: string;
+  upstreamModel: string;
+  upstreamProtocol: string;
+  proxy: string;
+  rule: string;
+  status: number;
+  error: string;
+  durationMs: number;
+  ttfbMs: number;
+  stream: boolean;
+  usage: Usage;
+  cost: number;
+  attempts: Attempt[];
+  pending?: boolean;
+}
+
+export interface LogBodies {
+  clientRequest: string;
+  clientHeaders: string;
+  upstreamUrl: string;
+  upstreamRequest: string;
+  upstreamHeaders: string;
+  upstreamStatus: number;
+  upstreamResponse: string;
+  clientResponse: string;
+}
+
+export interface LogQuery {
+  q?: string;
+  endpoint?: string;
+  status?: "all" | "ok" | "error";
+  before?: number;
+  limit?: number;
+}
+
+export interface UsageRow {
+  key: string;
+  label: string;
+  requests: number;
+  errors: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+  avgMs: number;
+}
+
+export interface DailyRow {
+  day: string;
+  requests: number;
+  errors: number;
+  input: number;
+  output: number;
+  cost: number;
+}
+
+export interface Stats {
+  total: UsageRow;
+  byModel: UsageRow[];
+  byEndpoint: UsageRow[];
+  daily: DailyRow[];
+}
+
+export interface ClientInfo {
+  id: "claude" | "codex" | "gemini";
+  name: string;
+  path: string;
+  connected: boolean;
+  hasBackup: boolean;
+  model: string;
+}
+
+export interface ApplyOptions {
+  model: string;
+  smallModel: string;
+  discovery: boolean;
+}
+
+export interface ListedModel {
+  id: string;
+  displayName: string;
+  endpoint: string;
+  vision: boolean;
+}
+
+export interface RouteHop {
+  gatewayModel: string;
+  endpointId: string;
+  endpointName: string;
+  protocol: Protocol;
+  upstreamModel: string;
+  proxy: string;
+  rule: string;
+}
+
+export interface PromptField {
+  key: string;
+  label: string;
+  kind: "text" | "password" | "code";
+  placeholder: string;
+  default: string;
+}
+
+export interface PromptForm {
+  title: string;
+  message: string;
+  fields: PromptField[];
+  submitText: string;
+  image?: string | null;
+}
+
+// ------------------------------------------------------------------ 钥匙串里的密钥名（与 Rust 端 plugin::keys 一致）
+
+export const secretKeys = {
+  apiKey: (ep: string) => `endpoint/${ep}/api_key`,
+  pluginSecret: (ep: string, key: string) => `endpoint/${ep}/plugin/${key}`,
+  proxyPassword: (id: string) => `proxy/${id}/password`,
+};
+
+// ------------------------------------------------------------------ 调用
+
+export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+let invokeImpl: Promise<InvokeFn> | null = null;
+
+function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  if (!invokeImpl) {
+    invokeImpl = isTauri
+      ? import("@tauri-apps/api/core").then((m) => m.invoke as InvokeFn)
+      : import("./mock").then((m) => m.mockInvoke as InvokeFn);
+  }
+  return invokeImpl.then((f) => f<T>(cmd, args));
+}
+
+export const api = {
+  getConfig: () => invoke<Config>("get_config"),
+  saveConfig: (config: Config) => invoke<void>("save_config", { config }),
+  getStatus: () => invoke<ServerStatus>("get_status"),
+  startServer: () => invoke<ServerStatus>("start_server"),
+  stopServer: () => invoke<ServerStatus>("stop_server"),
+  exportConfig: () => invoke<string>("export_config"),
+  importConfig: (toml: string) => invoke<Config>("import_config", { toml }),
+  revealConfig: () => invoke<void>("reveal_config"),
+  listModels: () => invoke<ListedModel[]>("list_models"),
+  explainRoute: (model: string, client: Protocol) => invoke<RouteHop[]>("explain_route", { model, client }),
+
+  secretFlags: (keys: string[]) => invoke<Record<string, boolean>>("secret_flags", { keys }),
+  setSecret: (key: string, value: string) => invoke<void>("set_secret", { key, value }),
+
+  listPlugins: () => invoke<PluginInfo[]>("list_plugins"),
+  loginEndpoint: (id: string) => invoke<CredentialStatus>("login_endpoint", { id }),
+  logoutEndpoint: (id: string) => invoke<void>("logout_endpoint", { id }),
+  credentialStatus: (id: string) => invoke<CredentialStatus>("credential_status", { id }),
+  answerPrompt: (id: string, values: Record<string, string> | null) => invoke<void>("answer_prompt", { id, values }),
+
+  testEndpoint: (id: string, model?: string) => invoke<TestResult>("test_endpoint", { id, model: model ?? null }),
+  testProxy: (id: string) => invoke<TestResult>("test_proxy", { id }),
+
+  listLogs: (query: LogQuery) => invoke<LogRecord[]>("list_logs", { query }),
+  getLog: (id: string) => invoke<{ record: LogRecord; bodies: LogBodies | null } | null>("get_log", { id }),
+  clearLogs: () => invoke<void>("clear_logs"),
+  getStats: (days: number) => invoke<Stats>("get_stats", { days, tzOffsetMin: -new Date().getTimezoneOffset() }),
+
+  listClients: () => invoke<ClientInfo[]>("list_clients"),
+  applyClient: (client: string, options: ApplyOptions) => invoke<void>("apply_client", { client, options }),
+  restoreClient: (client: string) => invoke<void>("restore_client", { client }),
+
+  getAutostart: () => invoke<boolean>("get_autostart"),
+  setAutostart: (enabled: boolean) => invoke<void>("set_autostart", { enabled }),
+};
+
+/** 订阅后端事件（实时日志、插件弹窗等）；浏览器里走 mock */
+export async function listen<T>(event: string, cb: (payload: T) => void): Promise<() => void> {
+  if (isTauri) {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<T>(event, (e) => cb(e.payload));
+  }
+  const { mockListen } = await import("./mock");
+  return mockListen(event, cb as (p: unknown) => void);
+}
+
+// ------------------------------------------------------------------ 默认值
+
+export function newEndpoint(): EndpointConfig {
+  return {
+    id: "",
+    name: "",
+    enabled: true,
+    protocol: "anthropic",
+    baseUrl: "",
+    auth: "auto",
+    proxy: "system",
+    plugin: "",
+    pluginSettings: {},
+    headers: {},
+    timeoutSecs: 300,
+    compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
+    models: [],
+    fallbacks: [],
+    note: "",
+  };
+}
+
+export function newModel(): ModelConfig {
+  return {
+    name: "",
+    upstream: "",
+    displayName: "",
+    enabled: true,
+    vision: true,
+    price: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    fallbacks: [],
+  };
+}
+
+export function uid(prefix: string) {
+  return `${prefix}${Math.random().toString(36).slice(2, 8)}`;
+}

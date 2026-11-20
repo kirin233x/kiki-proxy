@@ -316,3 +316,30 @@ fn error_bodies_are_readable() {
     let v: Value = protocol::error_body(Protocol::Anthropic, 429, "slow down");
     assert_eq!(v["error"]["type"], json!("rate_limit_error"));
 }
+
+#[test]
+fn frontend_config_shape_matches() {
+    // 前端（src/api.ts 的类型）生成的配置必须能被 Rust 端原样读回，字段名不能对不上
+    let raw = include_str!("frontend_config.json");
+    let cfg: kiki_core::config::Config = serde_json::from_str(raw).expect("前端配置的字段和 Rust 端对不上");
+    cfg.validate().unwrap();
+    assert_eq!(cfg.endpoints.len(), 4);
+    assert!(cfg.failover.on_5xx);
+    assert_eq!(cfg.rules[0].client, Some(Protocol::Anthropic));
+    assert!(cfg.endpoints[2].compat.send_reasoning_content);
+    // 再序列化回去，字段名应该和前端一致
+    fn norm(v: Value) -> Value {
+        match v {
+            Value::Number(n) => json!(n.as_f64()),
+            Value::Array(a) => Value::Array(a.into_iter().map(norm).collect()),
+            Value::Object(o) => Value::Object(o.into_iter().map(|(k, v)| (k, norm(v))).collect()),
+            v => v,
+        }
+    }
+    let back = norm(serde_json::to_value(&cfg).unwrap());
+    let orig = norm(serde_json::from_str(raw).unwrap());
+    assert_eq!(back, orig);
+    // TOML 往返
+    let toml = cfg.to_toml().unwrap();
+    assert_eq!(kiki_core::config::Config::from_toml(&toml).unwrap(), cfg);
+}

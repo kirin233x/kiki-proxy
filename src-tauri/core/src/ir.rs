@@ -188,6 +188,7 @@ pub enum StopReason {
 /// token 用量。`input` 是**不含缓存**的输入 token（Anthropic 的口径），
 /// 转成 OpenAI/Gemini 时再把缓存加回去。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Usage {
     pub input: u64,
     pub output: u64,

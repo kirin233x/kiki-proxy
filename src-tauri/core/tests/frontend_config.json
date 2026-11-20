@@ -1,0 +1,260 @@
+{
+  "server": {
+    "port": 41521,
+    "accessKey": ""
+  },
+  "routing": {
+    "defaultModel": "internal/sonnet",
+    "claudeAlias": true
+  },
+  "failover": {
+    "onConnectError": true,
+    "onTimeout": true,
+    "on5xx": true,
+    "on429": true,
+    "extraStatus": []
+  },
+  "logging": {
+    "bodyRetentionHours": 24,
+    "statsRetentionDays": 90,
+    "maxBodyKb": 8192
+  },
+  "ui": {
+    "theme": "auto",
+    "probeUrl": "https://www.gstatic.com/generate_204"
+  },
+  "proxies": [
+    {
+      "id": "corp",
+      "name": "公司代理",
+      "kind": "http",
+      "url": "http://proxy.corp.example:8080",
+      "username": ""
+    },
+    {
+      "id": "clash",
+      "name": "Clash",
+      "kind": "socks5",
+      "url": "127.0.0.1:7890",
+      "username": ""
+    }
+  ],
+  "endpoints": [
+    {
+      "id": "internal",
+      "name": "内部模型服务",
+      "enabled": true,
+      "protocol": "anthropic",
+      "baseUrl": "https://llm.corp.example/api",
+      "auth": "none",
+      "proxy": "direct",
+      "plugin": "example_sso",
+      "pluginSettings": {
+        "token_url": "https://sso.corp.example/token",
+        "biz": "ai-coding"
+      },
+      "headers": {},
+      "timeoutSecs": 300,
+      "compat": {
+        "sendReasoningContent": false,
+        "useMaxCompletionTokens": false,
+        "sendReasoningEffort": false,
+        "dropSamplingParams": false
+      },
+      "models": [
+        {
+          "name": "sonnet",
+          "upstream": "claude-sonnet-4-5",
+          "displayName": "Sonnet（内部）",
+          "enabled": true,
+          "vision": true,
+          "price": {
+            "input": 3,
+            "output": 15,
+            "cacheRead": 0.3,
+            "cacheWrite": 3.75
+          },
+          "fallbacks": []
+        },
+        {
+          "name": "opus",
+          "upstream": "claude-opus-4-5",
+          "displayName": "Opus（内部）",
+          "enabled": true,
+          "vision": true,
+          "price": {
+            "input": 5,
+            "output": 25,
+            "cacheRead": 0.5,
+            "cacheWrite": 6.25
+          },
+          "fallbacks": []
+        }
+      ],
+      "fallbacks": [
+        "anthropic/claude-sonnet-4-5",
+        "ds/deepseek-chat"
+      ],
+      "note": ""
+    },
+    {
+      "id": "anthropic",
+      "name": "Anthropic 官方",
+      "enabled": true,
+      "protocol": "anthropic",
+      "baseUrl": "https://api.anthropic.com",
+      "auth": "auto",
+      "proxy": "clash",
+      "plugin": "",
+      "pluginSettings": {},
+      "headers": {},
+      "timeoutSecs": 300,
+      "compat": {
+        "sendReasoningContent": false,
+        "useMaxCompletionTokens": false,
+        "sendReasoningEffort": false,
+        "dropSamplingParams": false
+      },
+      "models": [
+        {
+          "name": "claude-sonnet-4-5",
+          "upstream": "",
+          "displayName": "",
+          "enabled": true,
+          "vision": true,
+          "price": {
+            "input": 3,
+            "output": 15,
+            "cacheRead": 0.3,
+            "cacheWrite": 3.75
+          },
+          "fallbacks": []
+        },
+        {
+          "name": "claude-haiku-4-5",
+          "upstream": "",
+          "displayName": "",
+          "enabled": true,
+          "vision": true,
+          "price": {
+            "input": 1,
+            "output": 5,
+            "cacheRead": 0.1,
+            "cacheWrite": 1.25
+          },
+          "fallbacks": []
+        }
+      ],
+      "fallbacks": [],
+      "note": ""
+    },
+    {
+      "id": "ds",
+      "name": "DeepSeek",
+      "enabled": true,
+      "protocol": "openai_chat",
+      "baseUrl": "https://api.deepseek.com",
+      "auth": "auto",
+      "proxy": "direct",
+      "plugin": "",
+      "pluginSettings": {},
+      "headers": {},
+      "timeoutSecs": 300,
+      "compat": {
+        "sendReasoningContent": true,
+        "useMaxCompletionTokens": false,
+        "sendReasoningEffort": false,
+        "dropSamplingParams": false
+      },
+      "models": [
+        {
+          "name": "deepseek-chat",
+          "upstream": "",
+          "displayName": "DeepSeek V3",
+          "enabled": true,
+          "vision": false,
+          "price": {
+            "input": 0.28,
+            "output": 0.42,
+            "cacheRead": 0.028,
+            "cacheWrite": 0
+          },
+          "fallbacks": []
+        },
+        {
+          "name": "deepseek-reasoner",
+          "upstream": "",
+          "displayName": "DeepSeek R",
+          "enabled": true,
+          "vision": false,
+          "price": {
+            "input": 0.28,
+            "output": 0.42,
+            "cacheRead": 0.028,
+            "cacheWrite": 0
+          },
+          "fallbacks": []
+        }
+      ],
+      "fallbacks": [],
+      "note": ""
+    },
+    {
+      "id": "gm",
+      "name": "Gemini",
+      "enabled": false,
+      "protocol": "gemini",
+      "baseUrl": "https://generativelanguage.googleapis.com",
+      "auth": "auto",
+      "proxy": "clash",
+      "plugin": "",
+      "pluginSettings": {},
+      "headers": {},
+      "timeoutSecs": 300,
+      "compat": {
+        "sendReasoningContent": false,
+        "useMaxCompletionTokens": false,
+        "sendReasoningEffort": false,
+        "dropSamplingParams": false
+      },
+      "models": [
+        {
+          "name": "gemini-2.5-pro",
+          "upstream": "",
+          "displayName": "",
+          "enabled": true,
+          "vision": true,
+          "price": {
+            "input": 1.25,
+            "output": 10,
+            "cacheRead": 0.31,
+            "cacheWrite": 0
+          },
+          "fallbacks": []
+        }
+      ],
+      "fallbacks": [],
+      "note": ""
+    }
+  ],
+  "rules": [
+    {
+      "id": "r1",
+      "name": "后台小任务走 DeepSeek",
+      "enabled": true,
+      "pattern": "claude-*haiku*",
+      "client": "anthropic",
+      "target": "ds/deepseek-chat",
+      "proxy": ""
+    },
+    {
+      "id": "r2",
+      "name": "Codex 默认模型",
+      "enabled": true,
+      "pattern": "gpt-5*",
+      "client": "openai_responses",
+      "target": "internal/sonnet",
+      "proxy": ""
+    }
+  ]
+}

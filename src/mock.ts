@@ -1,0 +1,399 @@
+// 浏览器预览用的假数据（没有 Tauri 时）。只用于调试界面。
+
+import type { Config, LogRecord, Stats, UsageRow, DailyRow, PluginInfo, ClientInfo } from "./api";
+
+const listeners = new Map<string, Set<(p: unknown) => void>>();
+
+export function mockListen(event: string, cb: (p: unknown) => void) {
+  if (!listeners.has(event)) listeners.set(event, new Set());
+  // 每次订阅包一层，同一个回调订阅两次（StrictMode）也能各自取消
+  const wrapped = (p: unknown) => cb(p);
+  listeners.get(event)!.add(wrapped);
+  return () => {
+    listeners.get(event)?.delete(wrapped);
+  };
+}
+
+function emit(event: string, payload: unknown) {
+  listeners.get(event)?.forEach((cb) => cb(payload));
+}
+
+let config: Config = {
+  server: { port: 41521, accessKey: "" },
+  routing: { defaultModel: "internal/sonnet", claudeAlias: true },
+  failover: { onConnectError: true, onTimeout: true, on5xx: true, on429: true, extraStatus: [] },
+  logging: { bodyRetentionHours: 24, statsRetentionDays: 90, maxBodyKb: 8192 },
+  ui: { theme: "auto", probeUrl: "https://www.gstatic.com/generate_204" },
+  proxies: [
+    { id: "corp", name: "公司代理", kind: "http", url: "http://proxy.corp.example:8080", username: "" },
+    { id: "clash", name: "Clash", kind: "socks5", url: "127.0.0.1:7890", username: "" },
+  ],
+  endpoints: [
+    {
+      id: "internal",
+      name: "内部模型服务",
+      enabled: true,
+      protocol: "anthropic",
+      baseUrl: "https://llm.corp.example/api",
+      auth: "none",
+      proxy: "direct",
+      plugin: "example_sso",
+      pluginSettings: { token_url: "https://sso.corp.example/token", biz: "ai-coding" },
+      headers: {},
+      timeoutSecs: 300,
+      compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
+      models: [
+        { name: "sonnet", upstream: "claude-sonnet-4-5", displayName: "Sonnet（内部）", enabled: true, vision: true, price: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }, fallbacks: [] },
+        { name: "opus", upstream: "claude-opus-4-5", displayName: "Opus（内部）", enabled: true, vision: true, price: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }, fallbacks: [] },
+      ],
+      fallbacks: ["anthropic/claude-sonnet-4-5", "ds/deepseek-chat"],
+      note: "",
+    },
+    {
+      id: "anthropic",
+      name: "Anthropic 官方",
+      enabled: true,
+      protocol: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      auth: "auto",
+      proxy: "clash",
+      plugin: "",
+      pluginSettings: {},
+      headers: {},
+      timeoutSecs: 300,
+      compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
+      models: [
+        { name: "claude-sonnet-4-5", upstream: "", displayName: "", enabled: true, vision: true, price: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }, fallbacks: [] },
+        { name: "claude-haiku-4-5", upstream: "", displayName: "", enabled: true, vision: true, price: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 }, fallbacks: [] },
+      ],
+      fallbacks: [],
+      note: "",
+    },
+    {
+      id: "ds",
+      name: "DeepSeek",
+      enabled: true,
+      protocol: "openai_chat",
+      baseUrl: "https://api.deepseek.com",
+      auth: "auto",
+      proxy: "direct",
+      plugin: "",
+      pluginSettings: {},
+      headers: {},
+      timeoutSecs: 300,
+      compat: { sendReasoningContent: true, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
+      models: [
+        { name: "deepseek-chat", upstream: "", displayName: "DeepSeek V3", enabled: true, vision: false, price: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 }, fallbacks: [] },
+        { name: "deepseek-reasoner", upstream: "", displayName: "DeepSeek R", enabled: true, vision: false, price: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 }, fallbacks: [] },
+      ],
+      fallbacks: [],
+      note: "",
+    },
+    {
+      id: "gm",
+      name: "Gemini",
+      enabled: false,
+      protocol: "gemini",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      auth: "auto",
+      proxy: "clash",
+      plugin: "",
+      pluginSettings: {},
+      headers: {},
+      timeoutSecs: 300,
+      compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
+      models: [{ name: "gemini-2.5-pro", upstream: "", displayName: "", enabled: true, vision: true, price: { input: 1.25, output: 10, cacheRead: 0.31, cacheWrite: 0 }, fallbacks: [] }],
+      fallbacks: [],
+      note: "",
+    },
+  ],
+  rules: [
+    { id: "r1", name: "后台小任务走 DeepSeek", enabled: true, pattern: "claude-*haiku*", client: "anthropic", target: "ds/deepseek-chat", proxy: "" },
+    { id: "r2", name: "Codex 默认模型", enabled: true, pattern: "gpt-5*", client: "openai_responses", target: "internal/sonnet", proxy: "" },
+  ],
+};
+
+let running = true;
+const secrets = new Set<string>(["endpoint/anthropic/api_key", "endpoint/ds/api_key"]);
+
+const MODELS = ["internal/sonnet", "internal/opus", "ds/deepseek-chat", "anthropic/claude-sonnet-4-5"];
+const now = Date.now();
+
+function fakeLog(i: number): LogRecord {
+  const m = MODELS[i % MODELS.length];
+  const ep = config.endpoints.find((e) => m.startsWith(e.id + "/"))!;
+  const err = i % 11 === 3;
+  const failover = i % 13 === 5;
+  const input = 1200 + ((i * 7919) % 30000);
+  const output = 80 + ((i * 104729) % 2400);
+  const client = i % 4 === 0 ? "OpenAI Responses" : i % 5 === 0 ? "OpenAI Chat" : "Anthropic";
+  return {
+    id: `log${i}`,
+    ts: now - i * 97_000,
+    clientProtocol: client,
+    path: client === "Anthropic" ? "/v1/messages" : client === "OpenAI Chat" ? "/v1/chat/completions" : "/v1/responses",
+    requestedModel: i % 6 === 1 ? "claude-haiku-4-5-20251001" : m,
+    gatewayModel: failover ? "ds/deepseek-chat" : m,
+    endpointId: failover ? "ds" : ep.id,
+    endpointName: failover ? "DeepSeek" : ep.name,
+    upstreamModel: ep.models[0].upstream || ep.models[0].name,
+    upstreamProtocol: failover ? "OpenAI Chat" : ep.protocol === "anthropic" ? "Anthropic" : "OpenAI Chat",
+    proxy: ep.proxy,
+    rule: i % 6 === 1 ? "后台小任务走 DeepSeek" : failover ? "故障切换" : "",
+    status: err ? 529 : 200,
+    error: err ? "[内部模型服务] Overloaded" : "",
+    durationMs: 900 + ((i * 3571) % 24000),
+    ttfbMs: 300 + ((i * 1999) % 1800),
+    stream: i % 3 !== 2,
+    usage: { input, output, cacheRead: i % 2 ? input * 3 : 0, cacheWrite: 0 },
+    cost: err ? 0 : (input * 3 + output * 15) / 1e6,
+    attempts: failover
+      ? [{ gatewayModel: m, endpoint: ep.name, status: 503, error: "[内部模型服务] upstream connect error", durationMs: 1200 }]
+      : [],
+  };
+}
+
+const logs: LogRecord[] = Array.from({ length: 80 }, (_, i) => fakeLog(i));
+
+function usageRows(key: "gatewayModel" | "endpointId"): UsageRow[] {
+  const map = new Map<string, UsageRow>();
+  for (const l of logs) {
+    const k = l[key];
+    const r =
+      map.get(k) ??
+      ({ key: k, label: l.endpointName, requests: 0, errors: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, avgMs: 0 } as UsageRow);
+    r.requests++;
+    if (l.status !== 200) r.errors++;
+    r.input += l.usage.input;
+    r.output += l.usage.output;
+    r.cacheRead += l.usage.cacheRead;
+    r.cost += l.cost;
+    r.avgMs += l.durationMs;
+    map.set(k, r);
+  }
+  return [...map.values()].map((r) => ({ ...r, avgMs: r.avgMs / r.requests })).sort((a, b) => b.requests - a.requests);
+}
+
+function stats(days: number): Stats {
+  const byModel = usageRows("gatewayModel");
+  const total = byModel.reduce(
+    (t, r) => ({
+      ...t,
+      requests: t.requests + r.requests,
+      errors: t.errors + r.errors,
+      input: t.input + r.input,
+      output: t.output + r.output,
+      cacheRead: t.cacheRead + r.cacheRead,
+      cost: t.cost + r.cost,
+      avgMs: 4200,
+    }),
+    { key: "", label: "", requests: 0, errors: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, avgMs: 0 } as UsageRow,
+  );
+  const daily: DailyRow[] = Array.from({ length: days }, (_, i) => {
+    const d = new Date(now - (days - 1 - i) * 86400000);
+    const req = Math.round(40 + 60 * Math.abs(Math.sin(i * 1.7)) + (i % 7 < 5 ? 50 : 0));
+    return {
+      day: d.toISOString().slice(0, 10),
+      requests: req,
+      errors: Math.round(req * 0.04),
+      input: req * 21000,
+      output: req * 900,
+      cost: req * 0.045,
+    };
+  });
+  return { total, byModel, byEndpoint: usageRows("endpointId"), daily };
+}
+
+const plugins: PluginInfo[] = [
+  {
+    id: "example_sso",
+    name: "示例：内部 SSO",
+    description: "演示浏览器 SSO / 账号密码登录、token 刷新、改写请求与响应。复制 plugins/example.rs 改成你自己的。",
+    usesLogin: true,
+    settings: [
+      { key: "sso_url", label: "SSO 登录地址", help: "填了就用浏览器登录；留空则弹出账号密码表单", kind: "url", default: "", required: false },
+      { key: "token_url", label: "Token 接口", help: "", kind: "url", default: "", required: true },
+      { key: "callback_port", label: "回调端口", help: "SSO 要求固定回调端口时填写，否则留空", kind: "text", default: "", required: false },
+      { key: "biz", label: "业务线", help: "会写进请求体的 biz 字段", kind: "text", default: "ai-coding", required: false },
+      { key: "app_secret", label: "App Secret", help: "存在钥匙串里，会作为 X-App-Secret 请求头发送", kind: "secret", default: "", required: false },
+    ],
+  },
+];
+
+const clients: ClientInfo[] = [
+  { id: "claude", name: "Claude Code", path: "~/.claude/settings.json", connected: true, hasBackup: true, model: "internal/sonnet" },
+  { id: "codex", name: "Codex CLI", path: "~/.codex/config.toml", connected: false, hasBackup: false, model: "" },
+  { id: "gemini", name: "Gemini CLI", path: "~/.gemini/.env", connected: false, hasBackup: false, model: "" },
+];
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+let loggedIn = false;
+
+// 模拟实时请求
+setInterval(() => {
+  if (!running) return;
+  const l = { ...fakeLog(Math.floor(Math.random() * 50)), id: `live${Date.now()}`, ts: Date.now() };
+  logs.unshift(l);
+  emit("log", l);
+}, 7000);
+
+export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {}): Promise<T> {
+  await sleep(60);
+  const r = (v: unknown) => v as T;
+  switch (cmd) {
+    case "get_config":
+      return r(structuredClone(config));
+    case "save_config":
+      config = structuredClone(args.config);
+      return r(null);
+    case "get_status":
+    case "start_server":
+    case "stop_server":
+      if (cmd === "start_server") running = true;
+      if (cmd === "stop_server") running = false;
+      return r({ running, port: config.server.port, error: null, startedAt: now - 3 * 3600_000 });
+    case "export_config":
+      return r(`# kiki-proxy 配置\n[server]\nport = ${config.server.port}\naccessKey = ""\n`);
+    case "import_config":
+      return r(config);
+    case "reveal_config":
+      return r(null);
+    case "list_models":
+      return r(
+        config.endpoints
+          .filter((e) => e.enabled)
+          .flatMap((e) =>
+            e.models.map((m) => ({ id: `${e.id}/${m.name}`, displayName: m.displayName || `${e.id}/${m.name}`, endpoint: e.name, vision: m.vision })),
+          ),
+      );
+    case "explain_route": {
+      const name = String(args.model).replace(/^claude@/, "");
+      const rule = config.rules.find((x) => x.enabled && new RegExp("^" + x.pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i").test(name));
+      const target = rule?.target || (name.includes("/") ? name : config.routing.defaultModel);
+      const [prefix, model] = target.split("/");
+      const ep = config.endpoints.find((e) => e.id === prefix);
+      if (!ep) throw `kiki-proxy 找不到模型「${args.model}」`;
+      const m = ep.models.find((x) => x.name === model);
+      const hops = [{ gatewayModel: target, endpointId: ep.id, endpointName: ep.name, protocol: ep.protocol, upstreamModel: m?.upstream || model, proxy: rule?.proxy || ep.proxy, rule: rule?.name ?? (name.includes("/") ? "" : "默认模型") }];
+      for (const f of (m?.fallbacks.length ? m.fallbacks : ep.fallbacks)) {
+        const [p2, m2] = f.split("/");
+        const e2 = config.endpoints.find((e) => e.id === p2);
+        if (e2) hops.push({ gatewayModel: f, endpointId: e2.id, endpointName: e2.name, protocol: e2.protocol, upstreamModel: m2, proxy: e2.proxy, rule: "故障切换" });
+      }
+      return r(hops);
+    }
+    case "secret_flags":
+      return r(Object.fromEntries((args.keys as string[]).map((k) => [k, secrets.has(k)])));
+    case "set_secret":
+      if (args.value) secrets.add(args.key);
+      else secrets.delete(args.key);
+      return r(null);
+    case "list_plugins":
+      return r(plugins);
+    case "credential_status":
+      return r({ loggedIn, expiresAt: loggedIn ? Math.floor(Date.now() / 1000) + 7200 : null, expired: false });
+    case "login_endpoint": {
+      const id = "p1";
+      const answer = new Promise<Record<string, string> | null>((res) => {
+        pendingPrompt = res;
+      });
+      emit("plugin-prompt", {
+        id,
+        form: {
+          title: "登录「内部模型服务」",
+          message: "请输入内部账号和动态验证码，登录后 kiki-proxy 会自动续期。",
+          submitText: "登录",
+          fields: [
+            { key: "username", label: "账号", kind: "text", placeholder: "", default: "kirin" },
+            { key: "password", label: "密码", kind: "password", placeholder: "", default: "" },
+            { key: "otp", label: "验证码", kind: "code", placeholder: "6 位数字", default: "" },
+          ],
+        },
+      });
+      const v = await answer;
+      if (!v) throw "已取消登录";
+      loggedIn = true;
+      return r({ loggedIn: true, expiresAt: Math.floor(Date.now() / 1000) + 7200, expired: false });
+    }
+    case "answer_prompt":
+      pendingPrompt?.(args.values);
+      pendingPrompt = null;
+      return r(null);
+    case "logout_endpoint":
+      loggedIn = false;
+      return r(null);
+    case "test_endpoint":
+      await sleep(700);
+      return r(
+        args.id === "gm"
+          ? { ok: false, status: 400, latencyMs: 412, message: "API key not valid. Please pass a valid API key." }
+          : { ok: true, status: 200, latencyMs: 600 + Math.round(Math.random() * 900), message: "Hello" },
+      );
+    case "test_proxy":
+      await sleep(400);
+      return r({ ok: true, status: 204, latencyMs: 120 + Math.round(Math.random() * 300), message: "HTTP 204" });
+    case "list_logs": {
+      const q = args.query ?? {};
+      let out = logs;
+      if (q.q) out = out.filter((l) => l.requestedModel.includes(q.q) || l.gatewayModel.includes(q.q) || l.error.includes(q.q));
+      if (q.endpoint) out = out.filter((l) => l.endpointId === q.endpoint);
+      if (q.status === "ok") out = out.filter((l) => l.status === 200);
+      if (q.status === "error") out = out.filter((l) => l.status !== 200);
+      if (q.before) out = out.filter((l) => l.ts < q.before);
+      return r(out.slice(0, q.limit ?? 100));
+    }
+    case "get_log": {
+      const record = logs.find((l) => l.id === args.id);
+      if (!record) return r(null);
+      const req = {
+        model: record.requestedModel,
+        max_tokens: 32000,
+        stream: record.stream,
+        system: [{ type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." }],
+        messages: [
+          { role: "user", content: [{ type: "text", text: "帮我看看这个函数为什么慢" }, { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgoAAAANSUhEUgAA…" } }] },
+        ],
+        tools: [{ name: "Read", description: "Reads a file", input_schema: { type: "object" } }],
+      };
+      const up = { ...req, model: record.upstreamModel, biz: "ai-coding" };
+      return r({
+        record,
+        bodies: {
+          clientRequest: JSON.stringify(req),
+          clientHeaders: "content-type: application/json\nanthropic-version: 2023-06-01\nanthropic-beta: interleaved-thinking-2025-05-14\nauthorization: ••••roxy",
+          upstreamUrl: `https://llm.corp.example/api/v1/messages`,
+          upstreamRequest: JSON.stringify(up),
+          upstreamHeaders: "content-type: application/json\naccept: text/event-stream\nanthropic-version: 2023-06-01\nx-corp-token: ••••a9f2",
+          upstreamStatus: record.status,
+          upstreamResponse: record.stream
+            ? 'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_01","model":"claude-sonnet-4-5"}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"这个函数慢是因为"}}\n\n'
+            : '{"id":"msg_01","type":"message","content":[{"type":"text","text":"这个函数慢是因为……"}]}',
+          clientResponse: "（与上游响应相同，透传）",
+        },
+      });
+    }
+    case "clear_logs":
+      logs.length = 0;
+      return r(null);
+    case "get_stats":
+      return r(stats(args.days));
+    case "list_clients":
+      return r(clients);
+    case "apply_client":
+      clients.find((c) => c.id === args.client)!.connected = true;
+      clients.find((c) => c.id === args.client)!.hasBackup = true;
+      clients.find((c) => c.id === args.client)!.model = args.options.model;
+      return r(null);
+    case "restore_client":
+      clients.find((c) => c.id === args.client)!.connected = false;
+      clients.find((c) => c.id === args.client)!.hasBackup = false;
+      return r(null);
+    case "get_autostart":
+      return r(true);
+    case "set_autostart":
+      return r(null);
+  }
+  throw new Error(`mock: 未实现的命令 ${cmd}`);
+}
+
+let pendingPrompt: ((v: Record<string, string> | null) => void) | null = null;

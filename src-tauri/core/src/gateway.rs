@@ -1004,7 +1004,9 @@ async fn gemini(State(g): State<Gateway>, AxPath(rest): AxPath<String>, headers:
 async fn list_models(State(g): State<Gateway>, headers: HeaderMap) -> Response {
     let cfg = g.config();
     // Claude Code 的模型发现只保留名字里带 claude / anthropic 的模型
-    let for_claude = headers.contains_key("anthropic-version") && cfg.routing.claude_alias;
+    let ua = headers.get("user-agent").and_then(|v| v.to_str().ok()).unwrap_or("").to_lowercase();
+    let for_claude = cfg.routing.claude_alias
+        && (headers.contains_key("anthropic-version") || headers.contains_key("x-api-key") || ua.contains("claude"));
     let created = crate::ir::now_secs();
     let data: Vec<Value> = router::list_models(&cfg)
         .into_iter()

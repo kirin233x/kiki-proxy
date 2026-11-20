@@ -132,6 +132,35 @@ pub fn failover_chain(cfg: &Config, first: Target) -> Vec<Target> {
     chain
 }
 
+/// 路由测试用：一次请求会依次尝试哪些目标
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteHop {
+    pub gateway_model: String,
+    pub endpoint_id: String,
+    pub endpoint_name: String,
+    pub protocol: Protocol,
+    pub upstream_model: String,
+    pub proxy: String,
+    pub rule: String,
+}
+
+pub fn explain(cfg: &Config, requested: &str, client: Protocol) -> Result<Vec<RouteHop>> {
+    let first = resolve(cfg, requested, client)?;
+    Ok(failover_chain(cfg, first)
+        .into_iter()
+        .map(|t| RouteHop {
+            gateway_model: t.gateway_model,
+            endpoint_id: t.endpoint.id.clone(),
+            endpoint_name: t.endpoint.name.clone(),
+            protocol: t.endpoint.protocol,
+            upstream_model: t.upstream_model,
+            proxy: t.proxy,
+            rule: t.rule.unwrap_or_default(),
+        })
+        .collect())
+}
+
 /// 网关对外提供的模型列表
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]

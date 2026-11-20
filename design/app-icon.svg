@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <filter id="bg" x="-10%" y="-10%" width="120%" height="125%"><feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#1b1040" flood-opacity="0.3"/></filter>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6D5BFF"/>
+      <stop offset="0.6" stop-color="#7C5CFA"/>
+      <stop offset="1" stop-color="#9B5CF0"/>
+    </linearGradient>
+    <filter id="s" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#2A1065" flood-opacity="0.35"/></filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#g)" filter="url(#bg)"/>
+  <!-- 一进三出：本地网关把请求分流到不同端点 -->
+  <g filter="url(#s)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M300 512 H450" stroke="#FFFFFF" stroke-width="56"/>
+    <path d="M450 512 C540 512 540 352 640 352 H690" stroke="#FFFFFF" stroke-width="44" opacity="0.92"/>
+    <path d="M450 512 H690" stroke="#FFD1E8" stroke-width="44"/>
+    <path d="M450 512 C540 512 540 672 640 672 H690" stroke="#FFFFFF" stroke-width="44" opacity="0.92"/>
+  </g>
+  <g filter="url(#s)">
+    <circle cx="300" cy="512" r="58" fill="#FFFFFF"/>
+    <circle cx="300" cy="512" r="24" fill="#6D5BFF"/>
+    <circle cx="718" cy="352" r="40" fill="#FFFFFF"/>
+    <circle cx="718" cy="512" r="40" fill="#EC4899"/>
+    <circle cx="718" cy="672" r="40" fill="#FFFFFF"/>
+  </g>
+</svg>
