@@ -34,6 +34,8 @@ export interface ModelConfig {
   displayName: string;
   enabled: boolean;
   vision: boolean;
+  /** 上下文窗口（token），0 表示未知 */
+  contextWindow: number;
   price: Price;
   fallbacks: string[];
 }
@@ -80,6 +82,7 @@ export interface Config {
   failover: { onConnectError: boolean; onTimeout: boolean; on5xx: boolean; on429: boolean; extraStatus: number[] };
   logging: { bodyRetentionHours: number; statsRetentionDays: number; maxBodyKb: number };
   ui: { theme: "auto" | "light" | "dark"; probeUrl: string };
+  pricing: { url: string; proxy: string };
   proxies: ProxyConfig[];
   endpoints: EndpointConfig[];
   rules: RuleConfig[];
@@ -216,12 +219,14 @@ export interface ClientInfo {
   connected: boolean;
   hasBackup: boolean;
   model: string;
+  maxContextTokens: number;
 }
 
 export interface ApplyOptions {
   model: string;
   smallModel: string;
   discovery: boolean;
+  maxContextTokens: number;
 }
 
 export interface ListedModel {
@@ -229,6 +234,26 @@ export interface ListedModel {
   displayName: string;
   endpoint: string;
   vision: boolean;
+  contextWindow: number;
+}
+
+/** 价格表里查到的模型信息（价格单位：美元 / 百万 token） */
+export interface ModelInfo {
+  matched: string;
+  provider: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  contextWindow: number;
+  maxOutput: number;
+  vision: boolean;
+}
+
+export interface PricingStatus {
+  count: number;
+  updatedAt: number;
+  url: string;
 }
 
 export interface RouteHop {
@@ -305,6 +330,12 @@ export const api = {
   testEndpoint: (id: string, model?: string) => invoke<TestResult>("test_endpoint", { id, model: model ?? null }),
   testProxy: (id: string) => invoke<TestResult>("test_proxy", { id }),
 
+  pricingStatus: () => invoke<PricingStatus>("pricing_status"),
+  refreshPricing: () => invoke<PricingStatus>("refresh_pricing"),
+  lookupModels: (models: string[], baseUrl: string, protocol: Protocol) =>
+    invoke<(ModelInfo | null)[]>("lookup_models", { models, baseUrl, protocol }),
+  listUpstreamModels: (id: string) => invoke<string[]>("list_upstream_models", { id }),
+
   listLogs: (query: LogQuery) => invoke<LogRecord[]>("list_logs", { query }),
   getLog: (id: string) => invoke<{ record: LogRecord; bodies: LogBodies | null } | null>("get_log", { id }),
   clearLogs: () => invoke<void>("clear_logs"),
@@ -357,6 +388,7 @@ export function newModel(): ModelConfig {
     displayName: "",
     enabled: true,
     vision: true,
+    contextWindow: 0,
     price: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     fallbacks: [],
   };
@@ -364,4 +396,21 @@ export function newModel(): ModelConfig {
 
 export function uid(prefix: string) {
   return `${prefix}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** 把模型信息写进模型配置（只覆盖查到的字段） */
+export function applyModelInfo(m: ModelConfig, info: ModelInfo): ModelConfig {
+  return {
+    ...m,
+    contextWindow: m.contextWindow >= 1_000_000 ? m.contextWindow : info.contextWindow || m.contextWindow,
+    vision: info.vision,
+    price: { input: info.input, output: info.output, cacheRead: info.cacheRead, cacheWrite: info.cacheWrite },
+  };
+}
+
+export function fmtContext(n: number): string {
+  if (!n) return "未知";
+  if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(1)}M`;
+  // 131072 这种按 1024 算的写成 128K
+  return n % 1024 === 0 ? `${n / 1024}K` : `${Math.round(n / 1000)}K`;
 }

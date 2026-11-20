@@ -72,6 +72,7 @@ pub struct Inner {
     creds: Credentials,
     clients: Clients,
     store: Arc<Store>,
+    prices: crate::pricing::PriceCache,
     live: broadcast::Sender<LogRecord>,
     server: tokio::sync::Mutex<Option<RunningServer>>,
     status: RwLock<ServerStatus>,
@@ -130,6 +131,7 @@ impl Gateway {
             host,
             plugins: crate::plugins::registry(),
             clients: Clients::default(),
+            prices: crate::pricing::PriceCache::new(dir),
             store,
             live,
             server: tokio::sync::Mutex::new(None),
@@ -379,6 +381,15 @@ impl Gateway {
                 }
             }
         }
+        // 标了 1M 上下文的 Claude 模型：带上 1M 的 beta 开关（Claude Code 对网关里的模型名不会自动加）
+        let is_1m = target.model.as_ref().is_some_and(|m| m.context_window >= 1_000_000);
+        if is_1m && ep.protocol == Protocol::Anthropic && target.upstream_model.to_lowercase().starts_with("claude") {
+            let cur = headers.get("anthropic-beta").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+            if !cur.contains(CONTEXT_1M_BETA) {
+                let v = if cur.is_empty() { CONTEXT_1M_BETA.to_string() } else { format!("{cur},{CONTEXT_1M_BETA}") };
+                headers.insert("anthropic-beta", HeaderValue::from_str(&v)?);
+            }
+        }
         let url = upstream_url(&ep.base_url, ep.protocol, &target.upstream_model, stream, count_tokens);
         let mut req = UpstreamRequest { method: reqwest::Method::POST, url, headers, body, raw_body: None };
         let mut token = None;
@@ -614,6 +625,10 @@ impl Gateway {
         let resp = match f.raw {
             // 同协议：把上游的错误原样给客户端，信息最完整
             Some((status, body)) if up == client => raw_response(status, body, "application/json"),
+            // 上下文超长：改写成 Claude Code 认识的提示，它会自动压缩上下文后重试
+            _ if client == Protocol::Anthropic && matches!(f.status, 400 | 413) && is_context_overflow(&f.message) => {
+                error_response(client, 400, &format!("prompt is too long: {}", f.message))
+            }
             _ => {
                 let msg = if rec.attempts.len() > 1 {
                     let tried: Vec<String> = rec.attempts.iter().map(|a| a.gateway_model.clone()).collect();
@@ -882,6 +897,90 @@ impl Gateway {
 
     // ------------------------------------------------------------------ 测试
 
+    // ------------------------------------------------------------------ 价格表与上游模型
+
+    pub fn pricing_status(&self) -> crate::pricing::PricingStatus {
+        self.0.prices.status(&self.config().pricing.url)
+    }
+
+    pub async fn refresh_pricing(&self) -> Result<crate::pricing::PricingStatus> {
+        let cfg = self.config();
+        let http = self.0.clients.get(&cfg, &cfg.pricing.proxy, &*self.0.secrets)?;
+        self.0.prices.refresh(&http, &cfg.pricing.url).await
+    }
+
+    /// 查一批模型的价格 / 上下文；本地还没有价格表时先下载
+    pub async fn lookup_models(
+        &self,
+        models: &[String],
+        base_url: &str,
+        protocol: Protocol,
+    ) -> Result<Vec<Option<crate::pricing::ModelInfo>>> {
+        if self.0.prices.is_empty() {
+            self.refresh_pricing().await?;
+        }
+        let hint = crate::pricing::provider_hint(base_url, protocol);
+        Ok(models.iter().map(|m| self.0.prices.lookup(m, hint)).collect())
+    }
+
+    /// 从上游的 /models 接口拉取模型列表（端点需要先保存）
+    pub async fn list_upstream_models(&self, endpoint_id: &str) -> Result<Vec<String>> {
+        let cfg = self.config();
+        let ep = cfg.endpoint(endpoint_id).cloned().ok_or_else(|| anyhow!("端点不存在，请先保存"))?;
+        let target = Target {
+            gateway_model: String::new(),
+            upstream_model: String::new(),
+            proxy: ep.proxy.clone(),
+            model: None,
+            endpoint: ep.clone(),
+            rule: None,
+        };
+        let prep = self.prepare(&cfg, &target, None, Value::Null, false, None, false).await?;
+        let b = ep.base_url.trim().trim_end_matches('/');
+        let versioned = b.rsplit('/').next().is_some_and(|s| s.len() > 1 && s.starts_with('v') && s[1..2].chars().all(|c| c.is_ascii_digit()));
+        let url = match ep.protocol {
+            Protocol::Gemini => format!("{}/models?pageSize=1000", if versioned { b.to_string() } else { format!("{b}/v1beta") }),
+            _ => format!("{}/models", if versioned { b.to_string() } else { format!("{b}/v1") }),
+        };
+        let mut headers = prep.req.headers.clone();
+        headers.remove("content-type");
+        let resp = tokio::time::timeout(Duration::from_secs(30), prep.http.get(&url).headers(headers).send())
+            .await
+            .map_err(|_| anyhow!("获取模型列表超时"))?
+            .map_err(|e| anyhow!(describe_reqwest_error(&e)))?;
+        let status = resp.status();
+        let body = resp.bytes().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(anyhow!("上游返回 {status}：{}（不是所有服务都提供模型列表接口）", protocol::error_message(&body)));
+        }
+        let v: Value = serde_json::from_slice(&body).map_err(|_| anyhow!("上游的模型列表不是 JSON"))?;
+        let mut ids: Vec<String> = match ep.protocol {
+            Protocol::Gemini => v
+                .get("models")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|m| {
+                    m.get("supportedGenerationMethods")
+                        .and_then(Value::as_array)
+                        .is_none_or(|a| a.iter().any(|x| x.as_str() == Some("generateContent")))
+                })
+                .filter_map(|m| m.get("name").and_then(Value::as_str))
+                .map(|n| n.strip_prefix("models/").unwrap_or(n).to_string())
+                .collect(),
+            _ => v
+                .get("data")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|m| m.get("id").and_then(Value::as_str).map(str::to_string))
+                .collect(),
+        };
+        ids.sort();
+        ids.dedup();
+        Ok(ids)
+    }
+
     /// 用一个最小请求测试端点是否可用
     pub async fn test_endpoint(&self, endpoint_id: &str, model: Option<String>) -> TestResult {
         let cfg = self.config();
@@ -1012,11 +1111,15 @@ async fn list_models(State(g): State<Gateway>, headers: HeaderMap) -> Response {
         .into_iter()
         .map(|m| {
             let lower = m.id.to_lowercase();
-            let id = if for_claude && !lower.contains("claude") && !lower.contains("anthropic") {
+            let mut id = if for_claude && !lower.contains("claude") && !lower.contains("anthropic") {
                 format!("{CLAUDE_ALIAS}{}", m.id)
             } else {
                 m.id.clone()
             };
+            // Claude Code 看到 [1m] 后缀就按 1M 上下文使用（发请求前会去掉后缀）
+            if for_claude && m.context_window >= 1_000_000 {
+                id.push_str("[1m]");
+            }
             json!({
                 "id": id, "object": "model", "type": "model", "created": created,
                 "created_at": "2025-01-01T00:00:00Z", "owned_by": m.endpoint,
@@ -1083,6 +1186,27 @@ fn sse_response(body: Body) -> Response {
     h.insert("cache-control", HeaderValue::from_static("no-cache"));
     h.insert("x-accel-buffering", HeaderValue::from_static("no"));
     r
+}
+
+const CONTEXT_1M_BETA: &str = "context-1m-2025-08-07";
+
+/// 各家「上下文超长」错误的常见说法
+fn is_context_overflow(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    [
+        "context_length_exceeded",
+        "maximum context length",
+        "context length",
+        "context window",
+        "prompt is too long",
+        "input is too long",
+        "too many tokens",
+        "token limit",
+        "exceeds the maximum number of tokens",
+        "input token count",
+    ]
+    .iter()
+    .any(|p| m.contains(p))
 }
 
 fn describe_reqwest_error(e: &reqwest::Error) -> String {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Download, FolderOpen, Monitor, Moon, Puzzle, Sun, Upload } from "lucide-react";
-import { api, Config } from "../api";
+import { Download, FolderOpen, Monitor, Moon, Puzzle, RefreshCw, Sun, Upload } from "lucide-react";
+import { api, Config, PricingStatus } from "../api";
+import { fmtAgo } from "../utils";
 import { useApp } from "../App";
 import { Confirm, Modal, SecretInput, Switch, useToast } from "../components/ui";
 
@@ -231,6 +232,8 @@ export default function SettingsPage() {
           </div>
         </div>
 
+        <PricingSection />
+
         <div className="settings-group">
           <h3>已编译的插件</h3>
           <div className="panel">
@@ -315,5 +318,77 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
       </p>
       <textarea className="textarea mono" rows={16} value={text} onChange={(e) => setText(e.target.value)} placeholder="[server]&#10;port = 41521" />
     </Modal>
+  );
+}
+
+function PricingSection() {
+  const { config, saveConfig } = useApp();
+  const toast = useToast();
+  const [st, setSt] = useState<PricingStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api.pricingStatus().then(setSt);
+  }, []);
+  const refresh = async () => {
+    setBusy(true);
+    try {
+      const r = await api.refreshPricing();
+      setSt(r);
+      toast(`价格表已更新，共 ${r.count} 个模型`);
+    } catch (e) {
+      toast(String(e), true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="settings-group">
+      <h3>模型价格表</h3>
+      <div className="panel">
+        <div className="setting-row">
+          <div className="setting-text">
+            <b>LiteLLM 公开价格表</b>
+            <span>
+              {st?.count ? `${st.count} 个模型 · ${fmtAgo(st.updatedAt)}更新` : "还没有下载"}。端点编辑页的「自动填写价格和上下文」「从上游获取模型」会用到它
+            </span>
+          </div>
+          <button className="btn btn-sm" onClick={refresh} disabled={busy}>
+            <RefreshCw size={14} />
+            {busy ? "下载中…" : "立即更新"}
+          </button>
+        </div>
+        <div className="setting-row">
+          <div className="setting-text">
+            <b>下载地址</b>
+            <span>访问不了 GitHub 时，可以换成镜像地址（LiteLLM 的 JSON 格式）</span>
+          </div>
+          <input
+            className="input mono"
+            style={{ width: 320 }}
+            defaultValue={config.pricing.url}
+            onBlur={(e) => e.target.value.trim() !== config.pricing.url && saveConfig({ ...config, pricing: { ...config.pricing, url: e.target.value.trim() } }).catch(() => {})}
+          />
+        </div>
+        <div className="setting-row">
+          <div className="setting-text">
+            <b>下载走哪个出口</b>
+          </div>
+          <select
+            className="select"
+            style={{ width: 200 }}
+            value={config.pricing.proxy}
+            onChange={(e) => saveConfig({ ...config, pricing: { ...config.pricing, proxy: e.target.value } }).catch(() => {})}
+          >
+            <option value="system">跟随系统代理</option>
+            <option value="direct">直连</option>
+            {config.proxies.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+    </div>
   );
 }

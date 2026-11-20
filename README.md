@@ -13,6 +13,8 @@
 - **插件**：内部服务的特殊鉴权（浏览器 SSO、账号密码、验证码、动态 token）、请求和响应改写，写成 Rust 插件编译进 App。网关负责凭证缓存、过期刷新、401 后自动重新登录并重试。
 - **请求日志**：每个请求的客户端原始请求、发给上游的请求、上游原始响应、返回客户端的响应都能看到（密钥自动打码），可以一键复制成 curl 重放。完整内容默认保留 24 小时。
 - **用量统计**：按模型、按端点统计请求数、token、费用、耗时、失败率。
+- **一键获取模型和价格**：从上游的 `/models` 接口拉取模型列表，勾选添加；价格、上下文窗口、是否支持图片从 [LiteLLM 公开价格表](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) 自动填写（内部模型查不到的手动填）。
+- **上下文窗口**：每个模型可以标注上下文大小。≥ 1M 的模型在 Claude Code 的 `/model` 里带 `[1m]` 后缀；其他模型通过 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 告诉 Claude Code 何时压缩上下文（Claude Code 对不认识的模型名默认按 1M 处理）。上游返回「上下文超长」时，网关会改写成 Claude Code 认识的错误，让它自动压缩后重试。
 - **一键接入客户端**：自动修改 Claude Code / Codex / Gemini CLI 的配置文件（修改前自动备份，可一键恢复）。
 
 ## 路由规则

@@ -21,6 +21,7 @@ pub struct Config {
     pub failover: FailoverConfig,
     pub logging: LogConfig,
     pub ui: UiConfig,
+    pub pricing: PricingConfig,
     pub proxies: Vec<ProxyConfig>,
     pub endpoints: Vec<EndpointConfig>,
     pub rules: Vec<RuleConfig>,
@@ -116,6 +117,21 @@ impl Default for UiConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PricingConfig {
+    /// 价格表地址（LiteLLM 格式），访问不了 GitHub 时可以换成镜像
+    pub url: String,
+    /// 下载价格表走哪个出口
+    pub proxy: String,
+}
+
+impl Default for PricingConfig {
+    fn default() -> Self {
+        PricingConfig { url: crate::pricing::DEFAULT_URL.into(), proxy: PROXY_SYSTEM.into() }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProxyKind {
@@ -180,6 +196,8 @@ pub struct ModelConfig {
     pub enabled: bool,
     /// 支持图片输入
     pub vision: bool,
+    /// 上下文窗口（token），0 表示未知。≥ 1M 时 Claude Code 会按 1M 使用
+    pub context_window: u32,
     pub price: Price,
     /// 这个模型失败时依次尝试的模型（网关模型名）；为空时用端点的设置
     pub fallbacks: Vec<String>,
@@ -193,6 +211,7 @@ impl Default for ModelConfig {
             display_name: String::new(),
             enabled: true,
             vision: true,
+            context_window: 0,
             price: Price::default(),
             fallbacks: vec![],
         }

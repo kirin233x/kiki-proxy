@@ -6,7 +6,6 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
 use axum::Router;
 use kiki_core::config::*;
 use kiki_core::ir::*;
@@ -78,6 +77,14 @@ async fn up_handler(State(u): State<Upstream>, uri: axum::http::Uri, headers: He
     let prefix = path.split('/').nth(1).unwrap_or("");
     match prefix {
         "fail" => (StatusCode::SERVICE_UNAVAILABLE, r#"{"error":{"message":"down"}}"#).into_response(),
+        "long" => (
+            StatusCode::BAD_REQUEST,
+            r#"{"error":{"message":"This model's maximum context length is 131072 tokens. However, you requested 200000 tokens.","type":"invalid_request_error","code":"context_length_exceeded"}}"#,
+        )
+            .into_response(),
+        "an" if path.ends_with("/models") => {
+            (StatusCode::OK, r#"{"data":[{"id":"claude-b"},{"id":"claude-a"}],"has_more":false}"#).into_response()
+        }
         "auth" => {
             if headers.get("x-test-token").and_then(|v| v.to_str().ok()) == Some("token-2") {
                 upstream_reply(Protocol::OpenaiChat, stream)
@@ -156,11 +163,16 @@ struct Env {
 
 async fn setup() -> Env {
     let upstream = Upstream::default();
-    let up_port = serve(Router::new().fallback(post(up_handler)).with_state(upstream.clone())).await;
+    let up_port = serve(Router::new().fallback(up_handler).with_state(upstream.clone())).await;
     let base = |p: &str| format!("http://127.0.0.1:{up_port}/{p}");
     let mut cfg = Config::default();
     cfg.endpoints = vec![
-        endpoint("an", Protocol::Anthropic, base("an"), "claude"),
+        {
+            let mut e = endpoint("an", Protocol::Anthropic, base("an"), "claude");
+            e.models[0].context_window = 1_000_000;
+            e
+        },
+        endpoint("long", Protocol::OpenaiChat, base("long"), "small"),
         endpoint("oa", Protocol::OpenaiChat, base("oa"), "gpt"),
         endpoint("rs", Protocol::OpenaiResponses, base("rs"), "gpt5"),
         endpoint("gm", Protocol::Gemini, base("gm"), "gemini"),
@@ -335,9 +347,40 @@ async fn unknown_model_and_listing() {
         .unwrap();
     let v: Value = r.json().await.unwrap();
     let ids: Vec<&str> = v["data"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap()).collect();
-    assert!(ids.contains(&"an/claude"));
+    assert!(ids.contains(&"an/claude[1m]"));
     assert!(ids.contains(&"claude@oa/gpt"), "{ids:?}");
     // 带 claude@ 前缀的名字能正常路由
     let (status, _) = call(&env, Protocol::Anthropic, "claude@oa/gpt", false).await;
     assert_eq!(status, 200);
+}
+
+#[tokio::test]
+async fn context_1m_and_overflow() {
+    let env = setup().await;
+    // 1M 模型在给 Claude Code 的列表里带 [1m]
+    let v: Value = reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{}/v1/models", env.gw_port))
+        .header("x-api-key", "k")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let ids: Vec<&str> = v["data"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap()).collect();
+    assert!(ids.contains(&"an/claude[1m]"), "{ids:?}");
+    // 带 [1m] 的名字能路由，并且自动加了 1M beta 头
+    let (status, body) = call(&env, Protocol::Anthropic, "an/claude[1m]", false).await;
+    assert_eq!(status, 200, "{body}");
+    let (_, _, headers) = env.upstream.seen.lock().unwrap().last().cloned().unwrap();
+    assert!(headers.get("anthropic-beta").unwrap().to_str().unwrap().contains("context-1m-2025-08-07"));
+    // 上游的上下文超长错误改写成 Claude Code 认识的格式
+    let (status, body) = call(&env, Protocol::Anthropic, "long/small", false).await;
+    assert_eq!(status, 400);
+    let v: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["error"]["type"], json!("invalid_request_error"));
+    assert!(v["error"]["message"].as_str().unwrap().starts_with("prompt is too long"), "{body}");
+    // 从上游拉模型列表
+    let ids = env.gateway.list_upstream_models("an").await.unwrap();
+    assert_eq!(ids, vec!["claude-a", "claude-b"]);
 }

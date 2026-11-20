@@ -17,6 +17,7 @@ pub struct ClientInfo {
     pub has_backup: bool,
     /// 当前配置的模型
     pub model: String,
+    pub max_context_tokens: u32,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -28,6 +29,8 @@ pub struct ApplyOptions {
     pub small_model: String,
     /// Claude Code：开启从网关拉取模型列表（/model 里能看到所有模型）
     pub discovery: bool,
+    /// Claude Code：CLAUDE_CODE_MAX_CONTEXT_TOKENS，不带 [1m] 的模型按这个窗口压缩上下文；0 表示不设置
+    pub max_context_tokens: u32,
 }
 
 fn home() -> Result<PathBuf> {
@@ -126,6 +129,10 @@ pub fn list(port: u16) -> Vec<ClientInfo> {
             name: "Claude Code".into(),
             connected: v.pointer("/env/ANTHROPIC_BASE_URL").and_then(Value::as_str) == Some(base.as_str()),
             model: v.pointer("/env/ANTHROPIC_MODEL").and_then(Value::as_str).unwrap_or("").into(),
+            max_context_tokens: v
+                .pointer("/env/CLAUDE_CODE_MAX_CONTEXT_TOKENS")
+                .and_then(|x| x.as_str().and_then(|s| s.parse().ok()).or_else(|| x.as_u64()))
+                .unwrap_or(0) as u32,
             has_backup: backup_path(&p).exists(),
             path: p.display().to_string(),
         });
@@ -144,6 +151,7 @@ pub fn list(port: u16) -> Vec<ClientInfo> {
             name: "Codex CLI".into(),
             connected,
             model: doc.get("model").and_then(|v| v.as_str()).unwrap_or("").into(),
+            max_context_tokens: 0,
             has_backup: backup_path(&p).exists(),
             path: p.display().to_string(),
         });
@@ -158,6 +166,7 @@ pub fn list(port: u16) -> Vec<ClientInfo> {
             name: "Gemini CLI".into(),
             connected: get("GOOGLE_GEMINI_BASE_URL") == base,
             model: get("GEMINI_MODEL"),
+            max_context_tokens: 0,
             has_backup: backup_path(&p).exists(),
             path: p.display().to_string(),
         });
@@ -215,6 +224,8 @@ fn apply_claude(port: u16, key: &str, opts: &ApplyOptions) -> Result<()> {
     };
     set(env, "ANTHROPIC_MODEL", &opts.model);
     set(env, "ANTHROPIC_DEFAULT_HAIKU_MODEL", &opts.small_model);
+    let ctx = if opts.max_context_tokens > 0 { opts.max_context_tokens.to_string() } else { String::new() };
+    set(env, "CLAUDE_CODE_MAX_CONTEXT_TOKENS", &ctx);
     write_json(&p, &v)
 }
 

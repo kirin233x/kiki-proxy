@@ -23,6 +23,10 @@
     "theme": "auto",
     "probeUrl": "https://www.gstatic.com/generate_204"
   },
+  "pricing": {
+    "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+    "proxy": "system"
+  },
   "proxies": [
     {
       "id": "corp",
@@ -67,6 +71,7 @@
           "upstream": "claude-sonnet-4-5",
           "displayName": "Sonnet（内部）",
           "enabled": true,
+          "contextWindow": 1000000,
           "vision": true,
           "price": {
             "input": 3,
@@ -81,6 +86,7 @@
           "upstream": "claude-opus-4-5",
           "displayName": "Opus（内部）",
           "enabled": true,
+          "contextWindow": 200000,
           "vision": true,
           "price": {
             "input": 5,
@@ -121,6 +127,7 @@
           "upstream": "",
           "displayName": "",
           "enabled": true,
+          "contextWindow": 200000,
           "vision": true,
           "price": {
             "input": 3,
@@ -135,6 +142,7 @@
           "upstream": "",
           "displayName": "",
           "enabled": true,
+          "contextWindow": 200000,
           "vision": true,
           "price": {
             "input": 1,
@@ -172,6 +180,7 @@
           "upstream": "",
           "displayName": "DeepSeek V3",
           "enabled": true,
+          "contextWindow": 131072,
           "vision": false,
           "price": {
             "input": 0.28,
@@ -186,6 +195,7 @@
           "upstream": "",
           "displayName": "DeepSeek R",
           "enabled": true,
+          "contextWindow": 131072,
           "vision": false,
           "price": {
             "input": 0.28,
@@ -223,6 +233,7 @@
           "upstream": "",
           "displayName": "",
           "enabled": true,
+          "contextWindow": 1048576,
           "vision": true,
           "price": {
             "input": 1.25,

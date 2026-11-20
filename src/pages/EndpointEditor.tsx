@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, KeyRound, LogIn, LogOut, Plus, Puzzle, Save, Trash2, Zap } from "lucide-react";
+import { ArrowLeft, CloudDownload, KeyRound, LogIn, LogOut, Plus, Puzzle, Save, Sparkles, Trash2, Zap } from "lucide-react";
 import {
   api,
+  applyModelInfo,
   AuthMode,
   CredentialStatus,
   EndpointConfig,
@@ -15,6 +16,8 @@ import {
 import { useApp } from "../App";
 import { ModelChain } from "../components/ModelInput";
 import { Field, SecretInput, StatusDot, Switch, useToast } from "../components/ui";
+import ContextSelect from "../components/ContextSelect";
+import UpstreamModelsDialog from "../components/UpstreamModelsDialog";
 import { fmtMs, protocolColor, slugify } from "../utils";
 
 /** 常见服务的预设，填上去再改 */
@@ -59,6 +62,27 @@ export default function EndpointEditor({ id }: { id: string | null }) {
   const [test, setTest] = useState<TestResult | "busy" | null>(null);
   const [cred, setCred] = useState<CredentialStatus | null>(null);
   const [loggingIn, setLoggingIn] = useState(false);
+  const [filling, setFilling] = useState(false);
+  const [fetching, setFetching] = useState(false);
+
+  const autoFill = async () => {
+    setFilling(true);
+    try {
+      const infos = await api.lookupModels(
+        ep.models.map((m) => m.upstream || m.name),
+        ep.baseUrl,
+        ep.protocol,
+      );
+      const hit = infos.filter(Boolean).length;
+      setEp((x) => ({ ...x, models: x.models.map((m, i) => (infos[i] ? applyModelInfo(m, infos[i]!) : m)) }));
+      const miss = ep.models.filter((_, i) => !infos[i]).map((m) => m.upstream || m.name);
+      toast(miss.length ? `已填写 ${hit} 个模型；没找到：${miss.join("、")}` : `已填写 ${hit} 个模型的价格和上下文，记得保存`, !hit);
+    } catch (e) {
+      toast(String(e), true);
+    } finally {
+      setFilling(false);
+    }
+  };
 
   const plugin = plugins.find((p) => p.id === ep.plugin);
   const set = <K extends keyof EndpointConfig>(k: K, v: EndpointConfig[K]) => setEp((e) => ({ ...e, [k]: v }));
@@ -148,7 +172,7 @@ export default function EndpointEditor({ id }: { id: string | null }) {
 
   return (
     <div className="page">
-      <div className="page-inner" style={{ maxWidth: 940 }}>
+      <div className="page-inner" style={{ maxWidth: 1060 }}>
         <div className="page-header">
           <div>
             <button className="back-link" onClick={() => go({ name: "endpoints" })}>
@@ -285,13 +309,14 @@ export default function EndpointEditor({ id }: { id: string | null }) {
             <table className="grid-table">
               <thead>
                 <tr>
-                  <th style={{ width: "22%" }}>网关里的名字</th>
-                  <th style={{ width: "24%" }}>上游真实模型</th>
+                  <th style={{ width: "18%" }}>网关里的名字</th>
+                  <th style={{ width: "22%" }}>上游真实模型</th>
                   <th>显示名</th>
-                  <th style={{ width: 64 }}>图片</th>
-                  <th style={{ width: 150 }}>价格 $/M（入 / 出）</th>
-                  <th style={{ width: 64 }}>启用</th>
-                  <th style={{ width: 40 }} />
+                  <th style={{ width: 96 }}>上下文</th>
+                  <th style={{ width: 56 }}>图片</th>
+                  <th style={{ width: 140 }}>价格 $/M（入 / 出）</th>
+                  <th style={{ width: 56 }}>启用</th>
+                  <th style={{ width: 36 }} />
                 </tr>
               </thead>
               <tbody>
@@ -307,10 +332,13 @@ export default function EndpointEditor({ id }: { id: string | null }) {
                       <input className="input" value={m.displayName} placeholder={`${ep.id}/${m.name}`} onChange={(e) => updateModel(i, { displayName: e.target.value })} />
                     </td>
                     <td>
+                      <ContextSelect value={m.contextWindow} onChange={(v) => updateModel(i, { contextWindow: v })} />
+                    </td>
+                    <td>
                       <Switch on={m.vision} onChange={(v) => updateModel(i, { vision: v })} />
                     </td>
                     <td>
-                      <div className="price-pair">
+                      <div className="price-pair" title={cacheTip(m)}>
                         <input
                           className="input"
                           type="number"
@@ -318,7 +346,7 @@ export default function EndpointEditor({ id }: { id: string | null }) {
                           step="0.01"
                           value={m.price.input || ""}
                           placeholder="0"
-                          onChange={(e) => updateModel(i, { price: { ...m.price, input: Number(e.target.value), cacheRead: Number(e.target.value) * 0.1 } })}
+                          onChange={(e) => updateModel(i, { price: { ...m.price, input: Number(e.target.value) } })}
                         />
                         <input
                           className="input"
@@ -348,8 +376,27 @@ export default function EndpointEditor({ id }: { id: string | null }) {
                 <Plus size={14} />
                 添加模型
               </button>
+              <button
+                className="btn btn-sm"
+                disabled={isNew}
+                title={isNew ? "先保存端点，才能用 API Key 访问上游" : "调用上游的 /models 接口"}
+                onClick={() => setFetching(true)}
+              >
+                <CloudDownload size={14} />
+                从上游获取模型
+              </button>
+              <button className="btn btn-sm" disabled={!ep.models.length || filling} onClick={autoFill}>
+                <Sparkles size={14} />
+                {filling ? "查询中…" : "自动填写价格和上下文"}
+              </button>
+              <span className="muted-sm foot-note">数据来自 LiteLLM 公开价格表；内部模型查不到的需要手动填</span>
             </div>
           </div>
+          {ep.models.some((m) => m.contextWindow >= 1_000_000) && (
+            <p className="muted-sm" style={{ margin: "8px 4px 0" }}>
+              上下文 ≥ 1M 的模型，在 Claude Code 的 /model 里会带 <code>[1m]</code> 后缀，按 1M 上下文使用；Anthropic 端点还会自动加上 1M 的 beta 开关。
+            </p>
+          )}
         </div>
 
         {/* ---------------------------------------------------------------- 故障切换 */}
@@ -534,6 +581,23 @@ export default function EndpointEditor({ id }: { id: string | null }) {
           </div>
         </div>
       </div>
+      {fetching && (
+        <UpstreamModelsDialog
+          endpoint={ep}
+          beforeFetch={() => save(true)}
+          onClose={() => setFetching(false)}
+          onAdd={(models) => {
+            setEp((x) => ({ ...x, models: [...x.models, ...models] }));
+            setFetching(false);
+            toast(`已添加 ${models.length} 个模型，记得保存`);
+          }}
+        />
+      )}
     </div>
   );
+}
+
+function cacheTip(m: ModelConfig): string | undefined {
+  if (!m.price.cacheRead && !m.price.cacheWrite) return undefined;
+  return "缓存读 $" + m.price.cacheRead + "/M · 缓存写 $" + m.price.cacheWrite + "/M";
 }

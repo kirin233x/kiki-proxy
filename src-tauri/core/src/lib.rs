@@ -7,6 +7,7 @@ pub mod gateway;
 pub mod ir;
 pub mod plugin;
 pub mod plugins;
+pub mod pricing;
 pub mod protocol;
 pub mod router;
 pub mod sse;

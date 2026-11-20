@@ -228,6 +228,33 @@ fn answer_prompt(state: State<AppState>, id: String, values: Option<BTreeMap<Str
     }
 }
 
+// ------------------------------------------------------------------ 价格表与上游模型
+
+#[tauri::command]
+fn pricing_status(state: State<AppState>) -> kiki_core::pricing::PricingStatus {
+    state.gateway.pricing_status()
+}
+
+#[tauri::command]
+async fn refresh_pricing(state: State<'_, AppState>) -> CmdResult<kiki_core::pricing::PricingStatus> {
+    state.gateway.refresh_pricing().await.map_err(err)
+}
+
+#[tauri::command]
+async fn lookup_models(
+    state: State<'_, AppState>,
+    models: Vec<String>,
+    base_url: String,
+    protocol: kiki_core::ir::Protocol,
+) -> CmdResult<Vec<Option<kiki_core::pricing::ModelInfo>>> {
+    state.gateway.lookup_models(&models, &base_url, protocol).await.map_err(err)
+}
+
+#[tauri::command]
+async fn list_upstream_models(state: State<'_, AppState>, id: String) -> CmdResult<Vec<String>> {
+    state.gateway.list_upstream_models(&id).await.map_err(err)
+}
+
 // ------------------------------------------------------------------ 测试
 
 #[tauri::command]
@@ -454,6 +481,10 @@ pub fn run() {
             answer_prompt,
             test_endpoint,
             test_proxy,
+            pricing_status,
+            refresh_pricing,
+            lookup_models,
+            list_upstream_models,
             list_logs,
             get_log,
             clear_logs,

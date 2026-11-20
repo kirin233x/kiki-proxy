@@ -169,6 +169,7 @@ pub struct ListedModel {
     pub display_name: String,
     pub endpoint: String,
     pub vision: bool,
+    pub context_window: u32,
 }
 
 pub fn list_models(cfg: &Config) -> Vec<ListedModel> {
@@ -180,6 +181,7 @@ pub fn list_models(cfg: &Config) -> Vec<ListedModel> {
                 display_name: if m.display_name.is_empty() { format!("{}/{}", e.id, m.name) } else { m.display_name.clone() },
                 endpoint: e.name.clone(),
                 vision: m.vision,
+                context_window: m.context_window,
             });
         }
     }

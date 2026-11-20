@@ -24,6 +24,7 @@ let config: Config = {
   failover: { onConnectError: true, onTimeout: true, on5xx: true, on429: true, extraStatus: [] },
   logging: { bodyRetentionHours: 24, statsRetentionDays: 90, maxBodyKb: 8192 },
   ui: { theme: "auto", probeUrl: "https://www.gstatic.com/generate_204" },
+  pricing: { url: "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json", proxy: "system" },
   proxies: [
     { id: "corp", name: "公司代理", kind: "http", url: "http://proxy.corp.example:8080", username: "" },
     { id: "clash", name: "Clash", kind: "socks5", url: "127.0.0.1:7890", username: "" },
@@ -43,8 +44,8 @@ let config: Config = {
       timeoutSecs: 300,
       compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
       models: [
-        { name: "sonnet", upstream: "claude-sonnet-4-5", displayName: "Sonnet（内部）", enabled: true, vision: true, price: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }, fallbacks: [] },
-        { name: "opus", upstream: "claude-opus-4-5", displayName: "Opus（内部）", enabled: true, vision: true, price: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }, fallbacks: [] },
+        { name: "sonnet", upstream: "claude-sonnet-4-5", displayName: "Sonnet（内部）", enabled: true, contextWindow: 1000000, vision: true, price: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }, fallbacks: [] },
+        { name: "opus", upstream: "claude-opus-4-5", displayName: "Opus（内部）", enabled: true, contextWindow: 200000, vision: true, price: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }, fallbacks: [] },
       ],
       fallbacks: ["anthropic/claude-sonnet-4-5", "ds/deepseek-chat"],
       note: "",
@@ -63,8 +64,8 @@ let config: Config = {
       timeoutSecs: 300,
       compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
       models: [
-        { name: "claude-sonnet-4-5", upstream: "", displayName: "", enabled: true, vision: true, price: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }, fallbacks: [] },
-        { name: "claude-haiku-4-5", upstream: "", displayName: "", enabled: true, vision: true, price: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 }, fallbacks: [] },
+        { name: "claude-sonnet-4-5", upstream: "", displayName: "", enabled: true, contextWindow: 200000, vision: true, price: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }, fallbacks: [] },
+        { name: "claude-haiku-4-5", upstream: "", displayName: "", enabled: true, contextWindow: 200000, vision: true, price: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 }, fallbacks: [] },
       ],
       fallbacks: [],
       note: "",
@@ -83,8 +84,8 @@ let config: Config = {
       timeoutSecs: 300,
       compat: { sendReasoningContent: true, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
       models: [
-        { name: "deepseek-chat", upstream: "", displayName: "DeepSeek V3", enabled: true, vision: false, price: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 }, fallbacks: [] },
-        { name: "deepseek-reasoner", upstream: "", displayName: "DeepSeek R", enabled: true, vision: false, price: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 }, fallbacks: [] },
+        { name: "deepseek-chat", upstream: "", displayName: "DeepSeek V3", enabled: true, contextWindow: 131072, vision: false, price: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 }, fallbacks: [] },
+        { name: "deepseek-reasoner", upstream: "", displayName: "DeepSeek R", enabled: true, contextWindow: 131072, vision: false, price: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 }, fallbacks: [] },
       ],
       fallbacks: [],
       note: "",
@@ -102,7 +103,7 @@ let config: Config = {
       headers: {},
       timeoutSecs: 300,
       compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
-      models: [{ name: "gemini-2.5-pro", upstream: "", displayName: "", enabled: true, vision: true, price: { input: 1.25, output: 10, cacheRead: 0.31, cacheWrite: 0 }, fallbacks: [] }],
+      models: [{ name: "gemini-2.5-pro", upstream: "", displayName: "", enabled: true, contextWindow: 1048576, vision: true, price: { input: 1.25, output: 10, cacheRead: 0.31, cacheWrite: 0 }, fallbacks: [] }],
       fallbacks: [],
       note: "",
     },
@@ -221,9 +222,9 @@ const plugins: PluginInfo[] = [
 ];
 
 const clients: ClientInfo[] = [
-  { id: "claude", name: "Claude Code", path: "~/.claude/settings.json", connected: true, hasBackup: true, model: "internal/sonnet" },
-  { id: "codex", name: "Codex CLI", path: "~/.codex/config.toml", connected: false, hasBackup: false, model: "" },
-  { id: "gemini", name: "Gemini CLI", path: "~/.gemini/.env", connected: false, hasBackup: false, model: "" },
+  { id: "claude", name: "Claude Code", path: "~/.claude/settings.json", connected: true, hasBackup: true, model: "internal/sonnet", maxContextTokens: 0 },
+  { id: "codex", name: "Codex CLI", path: "~/.codex/config.toml", connected: false, hasBackup: false, model: "", maxContextTokens: 0 },
+  { id: "gemini", name: "Gemini CLI", path: "~/.gemini/.env", connected: false, hasBackup: false, model: "", maxContextTokens: 0 },
 ];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -263,7 +264,7 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
         config.endpoints
           .filter((e) => e.enabled)
           .flatMap((e) =>
-            e.models.map((m) => ({ id: `${e.id}/${m.name}`, displayName: m.displayName || `${e.id}/${m.name}`, endpoint: e.name, vision: m.vision })),
+            e.models.map((m) => ({ id: `${e.id}/${m.name}`, displayName: m.displayName || `${e.id}/${m.name}`, endpoint: e.name, vision: m.vision, contextWindow: m.contextWindow })),
           ),
       );
     case "explain_route": {
@@ -388,6 +389,23 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
       clients.find((c) => c.id === args.client)!.connected = false;
       clients.find((c) => c.id === args.client)!.hasBackup = false;
       return r(null);
+    case "pricing_status":
+      return r({ count: pricingLoaded ? 7039 : 0, updatedAt: pricingLoaded ? now - 2 * 86400_000 : 0, url: config.pricing.url });
+    case "refresh_pricing":
+      await sleep(900);
+      pricingLoaded = true;
+      return r({ count: 7039, updatedAt: Date.now(), url: config.pricing.url });
+    case "lookup_models":
+      await sleep(pricingLoaded ? 150 : 900);
+      pricingLoaded = true;
+      return r((args.models as string[]).map((m) => PRICES[m.replace(/-\d{8}$/, "")] ?? null));
+    case "list_upstream_models":
+      await sleep(500);
+      return r(
+        args.id === "ds"
+          ? ["deepseek-chat", "deepseek-reasoner"]
+          : ["claude-haiku-4-5-20251001", "claude-opus-4-1-20250805", "claude-opus-4-5-20251101", "claude-sonnet-4-20250514", "claude-sonnet-4-5-20250929"],
+      );
     case "get_autostart":
       return r(true);
     case "set_autostart":
@@ -397,3 +415,18 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
 }
 
 let pendingPrompt: ((v: Record<string, string> | null) => void) | null = null;
+
+let pricingLoaded = true;
+const P = (input: number, output: number, cacheRead: number, cacheWrite: number, contextWindow: number, vision: boolean, matched: string, provider: string) => ({
+  input, output, cacheRead, cacheWrite, contextWindow, vision, matched, provider, maxOutput: 64000,
+});
+const PRICES: Record<string, ReturnType<typeof P>> = {
+  "claude-sonnet-4-5": P(3, 15, 0.3, 3.75, 200000, true, "claude-sonnet-4-5", "anthropic"),
+  "claude-sonnet-4": P(3, 15, 0.3, 3.75, 200000, true, "claude-sonnet-4-20250514", "anthropic"),
+  "claude-opus-4-5": P(5, 25, 0.5, 6.25, 200000, true, "claude-opus-4-5", "anthropic"),
+  "claude-opus-4-1": P(15, 75, 1.5, 18.75, 200000, true, "claude-opus-4-1", "anthropic"),
+  "claude-haiku-4-5": P(1, 5, 0.1, 1.25, 200000, true, "claude-haiku-4-5", "anthropic"),
+  "deepseek-chat": P(0.28, 0.42, 0.028, 0, 131072, false, "deepseek/deepseek-chat", "deepseek"),
+  "deepseek-reasoner": P(0.28, 0.42, 0.028, 0, 131072, false, "deepseek/deepseek-reasoner", "deepseek"),
+  "gemini-2.5-pro": P(1.25, 10, 0.125, 0, 1048576, true, "gemini/gemini-2.5-pro", "gemini"),
+};

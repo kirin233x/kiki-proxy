@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { CheckCircle2, Monitor, RotateCcw, TerminalSquare, Wrench } from "lucide-react";
-import { api, ApplyOptions, ClientInfo } from "../api";
+import { api, ApplyOptions, ClientInfo, fmtContext } from "../api";
 import { useApp } from "../App";
 import ModelInput from "../components/ModelInput";
 import { CopyButton, Field, Switch, useToast } from "../components/ui";
@@ -21,7 +21,14 @@ export default function Clients() {
     refresh();
   }, []);
 
-  const o = (id: string): ApplyOptions => opts[id] ?? { model: clients.find((c) => c.id === id)?.model ?? "", smallModel: "", discovery: true };
+  // Claude Code 对不认识的模型名默认按 1M 上下文；没有 [1m] 的模型用这个值压缩上下文。建议取非 1M 模型里最小的窗口
+  const { models } = useApp();
+  const smallWindows = models.map((m) => m.contextWindow).filter((c) => c > 0 && c < 1_000_000);
+  const suggestedCtx = smallWindows.length ? Math.min(...smallWindows) : 0;
+  const o = (id: string): ApplyOptions => {
+    const c = clients.find((x) => x.id === id);
+    return opts[id] ?? { model: c?.model ?? "", smallModel: "", discovery: true, maxContextTokens: c?.maxContextTokens || (id === "claude" ? suggestedCtx : 0) };
+  };
   const setO = (id: string, patch: Partial<ApplyOptions>) => setOpts({ ...opts, [id]: { ...o(id), ...patch } });
 
   const apply = async (c: ClientInfo) => {
@@ -101,7 +108,28 @@ export default function Clients() {
                     <Field label="后台小任务模型" help="Claude Code 生成标题、摘要等用的 haiku 模型">
                       <ModelInput value={o(c.id).smallModel} onChange={(v) => setO(c.id, { smallModel: v })} placeholder="例如 ds/deepseek-chat" />
                     </Field>
-                    <div className="span-2 setting-inline">
+                    <Field
+                      label="非 1M 模型的上下文窗口"
+                      help={
+                        <>
+                          写入 CLAUDE_CODE_MAX_CONTEXT_TOKENS。Claude Code 对网关里的模型名默认按 1M 上下文使用，不设置的话 128K 的模型会一直塞到报错；
+                          标了 1M 的模型带 [1m] 后缀，不受这个值影响。{suggestedCtx > 0 && `建议：${fmtContext(suggestedCtx)}（已启用模型里最小的窗口）`}
+                        </>
+                      }
+                    >
+                      <select className="select" value={o(c.id).maxContextTokens} onChange={(e) => setO(c.id, { maxContextTokens: Number(e.target.value) })}>
+                        <option value={0}>不设置</option>
+                        {[...new Set([32_768, 65_536, 131_072, 200_000, 262_144, 400_000, ...(suggestedCtx ? [suggestedCtx] : []), ...(o(c.id).maxContextTokens ? [o(c.id).maxContextTokens] : [])])]
+                          .sort((a, b) => a - b)
+                          .map((v) => (
+                            <option key={v} value={v}>
+                              {fmtContext(v)}
+                              {v === suggestedCtx ? "（建议）" : ""}
+                            </option>
+                          ))}
+                      </select>
+                    </Field>
+                    <div className="setting-inline" style={{ alignSelf: "center" }}>
                       <Switch on={o(c.id).discovery} onChange={(v) => setO(c.id, { discovery: v })} />
                       <div>
                         <b>在 /model 里列出网关的所有模型</b>
