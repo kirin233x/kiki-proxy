@@ -49,6 +49,9 @@ struct Entry {
 #[derive(Default)]
 pub struct Processes {
     map: Mutex<HashMap<String, Entry>>,
+    /// 异步运行时。界面上的操作可能来自没有运行时的线程（比如 macOS 主线程），
+    /// 所以第一次在运行时里调用时记下来，之后都用它启动后台任务
+    runtime: Mutex<Option<tokio::runtime::Handle>>,
 }
 
 fn spec_of(cfg: &Config) -> HashMap<String, Spec> {
@@ -174,7 +177,19 @@ impl Processes {
         });
     }
 
+    fn runtime(&self) -> Option<tokio::runtime::Handle> {
+        let mut rt = self.runtime.lock();
+        if let Ok(h) = tokio::runtime::Handle::try_current() {
+            *rt = Some(h);
+        }
+        rt.clone()
+    }
+
     fn spawn_supervisor(self: &Arc<Self>, id: String, spec: Spec) {
+        let Some(rt) = self.runtime() else {
+            tracing::error!("没有可用的异步运行时，无法启动本地程序「{id}」");
+            return;
+        };
         let (tx, mut rx) = watch::channel(false);
         self.map.lock().insert(
             id.clone(),
@@ -186,7 +201,7 @@ impl Processes {
             },
         );
         let me = self.clone();
-        tokio::spawn(async move {
+        rt.spawn(async move {
             let mut backoff = 1u64;
             loop {
                 if *rx.borrow() {
@@ -308,6 +323,22 @@ mod tests {
             ..Default::default()
         });
         c
+    }
+
+    /// 回归测试：界面上的「重启」可能在没有异步运行时的线程上调用（macOS 主线程），不能 panic
+    #[tokio::test(flavor = "multi_thread")]
+    async fn restart_from_plain_thread() {
+        let p = Processes::new();
+        let c = cfg("echo started; sleep 30");
+        p.sync(&c);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let p2 = p.clone();
+        let c2 = c.clone();
+        std::thread::spawn(move || p2.restart("local", &c2)).join().expect("在普通线程上重启不应该 panic");
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        let st = p.status("local").unwrap();
+        assert_eq!(st.state, "running", "{st:?}");
+        p.stop_all();
     }
 
     #[tokio::test]

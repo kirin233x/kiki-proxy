@@ -155,9 +155,11 @@ fn process_status(state: State<AppState>, id: String) -> Option<ProcessStatus> {
     state.gateway.process_status(&id)
 }
 
+// 异步命令：在异步运行时里执行（同步命令跑在 macOS 主线程上，那里没有运行时）
 #[tauri::command]
-fn restart_process(state: State<AppState>, id: String) {
-    state.gateway.restart_process(&id)
+async fn restart_process(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.gateway.restart_process(&id);
+    Ok(())
 }
 
 // ------------------------------------------------------------------ 价格表与上游模型
