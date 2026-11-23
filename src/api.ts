@@ -323,6 +323,7 @@ export const api = {
   getConfig: () => invoke<Config>("get_config"),
   saveConfig: (config: Config) => invoke<void>("save_config", { config }),
   getStatus: () => invoke<ServerStatus>("get_status"),
+  appInfo: () => invoke<{ version: string; gitHash: string; buildTime: number }>("app_info"),
   startServer: () => invoke<ServerStatus>("start_server"),
   stopServer: () => invoke<ServerStatus>("stop_server"),
   exportConfig: () => invoke<string>("export_config"),

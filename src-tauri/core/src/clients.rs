@@ -573,7 +573,9 @@ mod tests {
                 "ANTHROPIC_BASE_URL": "https://old.example.com",
                 "ANTHROPIC_API_KEY": "sk-old",
                 "ANTHROPIC_MODEL": "gpt-6.2-sol[1M]",
-                "ANTHROPIC_DEFAULT_HAIKU_MODEL": "gpt-6.2-sol",
+                "ANTHROPIC_DEFAULT_FABLE_MODEL": "gpt-6.2-sol[1M]",
+                "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME": "gpt-6.2-sol",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL": "internal/haiku",
                 "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME": "gpt-6.2-sol",
                 "ANTHROPIC_DEFAULT_OPUS_MODEL": "gpt-6.2-sol[1M]",
                 "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": "gpt-6.2-sol",
@@ -614,7 +616,14 @@ mod tests {
         assert_eq!(env["ANTHROPIC_DEFAULT_HAIKU_MODEL"], json!("internal/haiku"));
         assert_eq!(env["ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"], json!("internal/haiku"));
         assert_eq!(env["ANTHROPIC_BASE_URL"], json!("http://127.0.0.1:41521"));
-        for gone in ["ANTHROPIC_API_KEY", "ANTHROPIC_SMALL_FAST_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_USE_BEDROCK"] {
+        for gone in [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_SMALL_FAST_MODEL",
+            "CLAUDE_CODE_SUBAGENT_MODEL",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "ANTHROPIC_DEFAULT_FABLE_MODEL",
+            "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
+        ] {
             assert!(env.get(gone).is_none(), "{gone} 应该被删掉");
         }
         assert_eq!(v["model"], json!("internal/sonnet[1m]"));

@@ -76,6 +76,24 @@ async fn save_config(app: AppHandle, state: State<'_, AppState>, config: Config)
     Ok(())
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppInfo {
+    version: &'static str,
+    git_hash: &'static str,
+    /// 构建时间（Unix 秒）
+    build_time: u64,
+}
+
+#[tauri::command]
+fn app_info() -> AppInfo {
+    AppInfo {
+        version: env!("CARGO_PKG_VERSION"),
+        git_hash: env!("KIKI_GIT_HASH"),
+        build_time: env!("KIKI_BUILD_TIME").parse().unwrap_or(0),
+    }
+}
+
 #[tauri::command]
 fn get_status(state: State<AppState>) -> ServerStatus {
     state.gateway.status()
@@ -436,6 +454,7 @@ pub fn run() {
             get_config,
             save_config,
             get_status,
+            app_info,
             start_server,
             stop_server,
             export_config,

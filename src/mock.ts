@@ -453,6 +453,8 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
           ? ["deepseek-chat", "deepseek-reasoner"]
           : ["claude-haiku-4-5-20251001", "claude-opus-4-1-20250805", "claude-opus-4-5-20251101", "claude-sonnet-4-20250514", "claude-sonnet-4-5-20250929"],
       );
+    case "app_info":
+      return r({ version: "0.1.0", gitHash: "浏览器预览", buildTime: Math.floor(Date.now() / 1000) });
     case "get_autostart":
       return r(true);
     case "set_autostart":

@@ -9,6 +9,7 @@ export default function SettingsPage() {
   const { config, saveConfig } = useApp();
   const toast = useToast();
   const [autostart, setAutostart] = useState(false);
+  const [info, setInfo] = useState<{ version: string; gitHash: string; buildTime: number } | null>(null);
   const [port, setPort] = useState(String(config.server.port));
   const [accessKey, setAccessKey] = useState("");
   const [exported, setExported] = useState<string | null>(null);
@@ -17,6 +18,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     api.getAutostart().then(setAutostart);
+    api.appInfo().then(setInfo).catch(() => {});
   }, []);
 
   const save = (patch: (c: Config) => Config) => saveConfig(patch(structuredClone(config))).catch(() => {});
@@ -281,7 +283,12 @@ export default function SettingsPage() {
         <div className="about">
           <div className="brand-logo">k</div>
           <div>
-            <b>kiki-proxy 0.1.0</b>
+            <b>kiki-proxy {info ? info.version : ""}</b>
+            {info && (
+              <span className="mono-sm">
+                构建 {info.gitHash} · {new Date(info.buildTime * 1000).toLocaleString("zh-CN")}
+              </span>
+            )}
             <span>本地 AI 网关 · 配置文件、日志数据库保存在本机，不会上传到任何地方</span>
           </div>
         </div>
