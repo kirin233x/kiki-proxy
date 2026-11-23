@@ -409,10 +409,29 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
     case "list_clients":
       return r(clients);
     case "apply_client":
+      if (args.client === "claude") {
+        const id = args.options.model || "internal/sonnet";
+        clients[0].model = id;
+        return r({
+          file: "~/.claude/settings.json",
+          changes: [
+            "删除 apiKeyHelper（原来是 ~/bin/get-key.sh；它会顶掉网关用的 token）",
+            "修改 env.ANTHROPIC_BASE_URL：https://old.example.com → http://127.0.0.1:41521",
+            "删除 env.ANTHROPIC_API_KEY（原来是 ••••；和 ANTHROPIC_AUTH_TOKEN 冲突）",
+            `修改 env.ANTHROPIC_MODEL：gpt-6.2-sol[1M] → ${id}[1m]`,
+            `修改 env.ANTHROPIC_DEFAULT_OPUS_MODEL：gpt-6.2-sol[1M] → ${id}[1m]`,
+            "修改 env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME：gpt-6.2-sol → Sonnet（内部）",
+            `修改 env.ANTHROPIC_DEFAULT_SONNET_MODEL：gpt-6.2-sol[1M] → ${id}[1m]`,
+            "修改 env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME：gpt-6.2-sol → Sonnet（内部）",
+            "修改 env.ANTHROPIC_DEFAULT_HAIKU_MODEL：gpt-6.2-sol → ds/deepseek-chat",
+            "删除 env.CLAUDE_CODE_SUBAGENT_MODEL（原来是 gpt-6.2-sol；会让子代理固定用这个模型）",
+          ],
+        });
+      }
       clients.find((c) => c.id === args.client)!.connected = true;
       clients.find((c) => c.id === args.client)!.hasBackup = true;
       clients.find((c) => c.id === args.client)!.model = args.options.model;
-      return r(null);
+      return r({ file: "", changes: [] });
     case "restore_client":
       clients.find((c) => c.id === args.client)!.connected = false;
       clients.find((c) => c.id === args.client)!.hasBackup = false;

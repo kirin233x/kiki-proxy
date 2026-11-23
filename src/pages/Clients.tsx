@@ -1,9 +1,9 @@
 import { ReactNode, useEffect, useMemo, useState } from "react";
 import { Check, Download, FileJson, RotateCcw } from "lucide-react";
-import { api, ApplyOptions, ClientInfo, DesktopModel, fmtContext } from "../api";
+import { api, ApplyOptions, ApplyReport, ClientInfo, DesktopModel, fmtContext } from "../api";
 import { useApp } from "../App";
 import ModelInput from "../components/ModelInput";
-import { CopyButton, Switch, useToast } from "../components/ui";
+import { CopyButton, Modal, Switch, useToast } from "../components/ui";
 
 const CTX_OPTIONS = [32_768, 65_536, 131_072, 200_000, 262_144, 400_000];
 
@@ -12,6 +12,7 @@ export default function Clients() {
   const toast = useToast();
   const [clients, setClients] = useState<ClientInfo[]>([]);
   const [opts, setOpts] = useState<Record<string, ApplyOptions>>({});
+  const [report, setReport] = useState<(ApplyReport & { name: string }) | null>(null);
   const refresh = () => api.listClients().then(setClients);
   useEffect(() => {
     refresh();
@@ -22,15 +23,24 @@ export default function Clients() {
   const suggestedCtx = smallWindows.length ? Math.min(...smallWindows) : 0;
   const o = (id: string): ApplyOptions => {
     const c = clients.find((x) => x.id === id);
-    return opts[id] ?? { model: c?.model ?? "", smallModel: "", discovery: true, maxContextTokens: c?.maxContextTokens || (id === "claude" ? suggestedCtx : 0) };
+    return (
+      opts[id] ?? {
+        model: c?.model ?? "",
+        opusModel: "",
+        sonnetModel: "",
+        smallModel: "",
+        discovery: true,
+        maxContextTokens: c?.maxContextTokens || (id === "claude" ? suggestedCtx : 0),
+      }
+    );
   };
   const setO = (id: string, patch: Partial<ApplyOptions>) => setOpts({ ...opts, [id]: { ...o(id), ...patch } });
   const client = (id: ClientInfo["id"]) => clients.find((c) => c.id === id);
 
   const apply = async (c: ClientInfo) => {
     try {
-      await api.applyClient(c.id, o(c.id));
-      toast(`已写入 ${c.name} 的配置，重新打开 ${c.name} 后生效`);
+      const r = await api.applyClient(c.id, o(c.id));
+      setReport({ ...r, name: c.name });
       refresh();
     } catch (e) {
       toast(String(e), true);
@@ -90,8 +100,21 @@ export default function Clients() {
               <Row label="默认模型" help="留空则用 Claude Code 自己的默认模型（按路由规则或兜底模型转发）">
                 <ModelInput value={o("claude").model} onChange={(v) => setO("claude", { model: v })} placeholder="例如 internal/sonnet" />
               </Row>
-              <Row label="后台小任务模型" help="生成标题、摘要等用的 haiku 模型">
-                <ModelInput value={o("claude").smallModel} onChange={(v) => setO("claude", { smallModel: v })} placeholder="例如 ds/deepseek-chat" />
+              <Row label="/model 里的三档" help="Claude Code 的 Opus、Sonnet、Haiku 实际用哪个模型。留空就跟默认模型一致；Haiku 也用于生成标题、摘要等后台小任务">
+                <div className="tier-grid">
+                  {(
+                    [
+                      ["opusModel", "Opus"],
+                      ["sonnetModel", "Sonnet"],
+                      ["smallModel", "Haiku"],
+                    ] as const
+                  ).map(([k, label]) => (
+                    <label key={k}>
+                      <span>{label}</span>
+                      <ModelInput value={o("claude")[k]} onChange={(v) => setO("claude", { [k]: v })} placeholder={o("claude").model || "跟默认模型一致"} />
+                    </label>
+                  ))}
+                </div>
               </Row>
               <Row
                 label="非 1M 模型的上下文窗口"
@@ -153,6 +176,35 @@ export default function Clients() {
             </ClientCard>
           )}
         </div>
+
+        {report && (
+          <Modal
+            title={`已写入 ${report.name} 的配置`}
+            icon={<Check size={18} />}
+            wide
+            onClose={() => setReport(null)}
+            footer={
+              <button className="btn btn-primary" onClick={() => setReport(null)}>
+                好的
+              </button>
+            }
+          >
+            <p className="muted-sm" style={{ marginTop: 0 }}>
+              文件：<code>{report.file}</code>。原文件已备份，可以随时「恢复」。重新打开 {report.name} 后生效。
+            </p>
+            {report.changes.length === 0 ? (
+              <div className="banner ok">配置已经是最新的，没有需要改动的地方</div>
+            ) : (
+              <ul className="change-list">
+                {report.changes.map((c, i) => (
+                  <li key={i} className={c.startsWith("删除") ? "del" : c.startsWith("修改") ? "mod" : "add"}>
+                    {c}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Modal>
+        )}
 
         {/* ---------------------------------------------------------------- 其他 */}
         <div className="panel cc-card">

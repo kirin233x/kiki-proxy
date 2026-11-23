@@ -267,9 +267,8 @@ fn list_clients(state: State<AppState>) -> Vec<ClientInfo> {
 }
 
 #[tauri::command]
-fn apply_client(state: State<AppState>, client: String, options: ApplyOptions) -> CmdResult<()> {
-    let cfg = state.gateway.config();
-    clients::apply(&client, cfg.server.port, &cfg.server.access_key, &options).map_err(err)
+fn apply_client(state: State<AppState>, client: String, options: ApplyOptions) -> CmdResult<clients::ApplyReport> {
+    clients::apply(&client, &state.gateway.config(), &options).map_err(err)
 }
 
 #[tauri::command]

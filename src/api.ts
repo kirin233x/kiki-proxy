@@ -236,6 +236,11 @@ export interface ClientInfo {
   maxContextTokens: number;
 }
 
+export interface ApplyReport {
+  file: string;
+  changes: string[];
+}
+
 export interface DesktopModel {
   name: string;
   label: string;
@@ -244,6 +249,11 @@ export interface DesktopModel {
 
 export interface ApplyOptions {
   model: string;
+  /** /model 里 Opus 档，留空跟默认模型一致 */
+  opusModel: string;
+  /** /model 里 Sonnet 档，留空跟默认模型一致 */
+  sonnetModel: string;
+  /** Haiku 档（后台小任务），留空跟默认模型一致 */
   smallModel: string;
   discovery: boolean;
   maxContextTokens: number;
@@ -348,7 +358,7 @@ export const api = {
   getStats: (days: number) => invoke<Stats>("get_stats", { days, tzOffsetMin: -new Date().getTimezoneOffset() }),
 
   listClients: () => invoke<ClientInfo[]>("list_clients"),
-  applyClient: (client: string, options: ApplyOptions) => invoke<void>("apply_client", { client, options }),
+  applyClient: (client: string, options: ApplyOptions) => invoke<ApplyReport>("apply_client", { client, options }),
   restoreClient: (client: string) => invoke<void>("restore_client", { client }),
   /** 生成 Claude 桌面版可导入的配置文件，返回文件路径 */
   exportDesktopConfig: (models: DesktopModel[]) => invoke<string>("export_desktop_config", { models }),
