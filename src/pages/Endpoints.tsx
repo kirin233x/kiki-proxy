@@ -27,7 +27,7 @@ export default function Endpoints() {
     let n = 2;
     while (config.endpoints.some((x) => x.id === id)) id = `${e.id}-${++n}`;
     saveConfig({ ...config, endpoints: [...config.endpoints, { ...structuredClone(e), id, name: `${e.name} 副本` }] }).then(() =>
-      toast(`已复制为「${e.name} 副本」，API Key 需要重新填写`),
+      toast(`已复制为「${e.name} 副本」，请重新填写 API Key`),
     );
   };
 
@@ -37,7 +37,7 @@ export default function Endpoints() {
         <div className="page-header">
           <div>
             <h1 className="page-title">端点</h1>
-            <div className="page-subtitle">客户端用「前缀/模型名」访问，例如 {config.endpoints[0] ? `${config.endpoints[0].id}/${config.endpoints[0].models[0]?.name ?? "模型"}` : "internal/sonnet"}</div>
+            <div className="page-subtitle">客户端通过「前缀/模型 ID」访问，如 {config.endpoints[0] ? `${config.endpoints[0].id}/${config.endpoints[0].models[0]?.name ?? "模型"}` : "internal/sonnet"}</div>
           </div>
           <div className="header-actions">
             <button className="btn btn-primary" onClick={() => go({ name: "endpoint", id: null })}>
@@ -49,8 +49,8 @@ export default function Endpoints() {
 
         {config.endpoints.length === 0 ? (
           <div className="panel">
-            <Empty icon={<Server size={22} />} title="还没有端点" action={<button className="btn btn-primary" onClick={() => go({ name: "endpoint", id: null })}>添加端点</button>}>
-              官方 API、中转站、公司内部服务都可以作为端点
+            <Empty icon={<Server size={22} />} title="暂无端点" action={<button className="btn btn-primary" onClick={() => go({ name: "endpoint", id: null })}>添加端点</button>}>
+              官方 API、中转服务和内部服务均可作为端点
             </Empty>
           </div>
         ) : (
@@ -80,7 +80,7 @@ export default function Endpoints() {
                         )}
                       </span>
                     </div>
-                    <label className="ep2-toggle" title={e.enabled ? "点击停用：停用后不再转发到这个端点，也不会启动它的本地程序" : "点击启用"}>
+                    <label className="ep2-toggle" title={e.enabled ? "停用后网关不再向该端点转发请求，也不会启动其本地服务" : "启用该端点"}>
                       <span>{e.enabled ? "已启用" : "已停用"}</span>
                       <Switch on={e.enabled} onChange={(v) => update(e.id, { enabled: v })} />
                     </label>
@@ -106,7 +106,7 @@ export default function Endpoints() {
                   </div>
 
                   <div className="ep2-models">
-                    {e.models.length === 0 && <span className="muted-sm">还没有配置模型</span>}
+                    {e.models.length === 0 && <span className="muted-sm">未配置模型</span>}
                     {e.models.map((m) => (
                       <div key={m.name} className={`ep2-model ${m.enabled ? "" : "off"}`}>
                         <code>{m.name}</code>

@@ -57,11 +57,11 @@ export default function Overview() {
                 <Server size={46} />
               </div>
             </div>
-            <h2>先添加一个端点</h2>
+            <h2>添加第一个端点</h2>
             <p>
-              端点就是一个上游服务：官方 API、中转站，或者你们的内部服务。
+              端点即一个上游服务，可以是官方 API、中转服务或内部服务。
               <br />
-              添加后，客户端用「端点前缀/模型名」就能访问它。
+              添加后，客户端通过「前缀/模型 ID」访问。
             </p>
             <div className="empty-actions">
               <button className="btn btn-primary btn-lg" onClick={() => go({ name: "endpoint", id: null })}>
@@ -81,7 +81,7 @@ export default function Overview() {
         <div className="page-header">
           <div>
             <h1 className="page-title">概览</h1>
-            <div className="page-subtitle">所有客户端都连 {baseUrl}，按模型名分流到不同端点</div>
+            <div className="page-subtitle">客户端统一连接 {baseUrl}，按模型名路由至各端点</div>
           </div>
         </div>
 
@@ -198,8 +198,8 @@ export default function Overview() {
         </div>
         <div className="panel">
           {recent.length === 0 ? (
-            <Empty icon={<Activity size={22} />} title={status.running ? "还没有请求" : "网关已暂停"}>
-              把客户端的地址设为 <code>{baseUrl}</code> 就能看到请求了
+            <Empty icon={<Activity size={22} />} title={status.running ? "暂无请求" : "网关已暂停"}>
+              将客户端的 Base URL 设置为 <code>{baseUrl}</code> 后，请求将显示在这里
               <span style={{ marginLeft: 6 }}>
                 <CopyButton text={baseUrl} small />
               </span>

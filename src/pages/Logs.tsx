@@ -112,11 +112,19 @@ export default function Logs({ initialEndpoint }: { initialEndpoint?: string }) 
                   <th style={{ width: 92 }}>时间</th>
                   <th style={{ width: 72 }}>状态</th>
                   <th>模型</th>
-                  <th className="col-optional" style={{ width: 128 }}>端点</th>
-                  <th className="col-optional" style={{ width: 128 }}>客户端</th>
-                  <th className="col-optional" style={{ width: 118, textAlign: "right" }}>输入 / 输出</th>
+                  <th className="col-optional" style={{ width: 128 }}>
+                    端点
+                  </th>
+                  <th className="col-optional" style={{ width: 128 }}>
+                    客户端
+                  </th>
+                  <th className="col-optional" style={{ width: 118, textAlign: "right" }}>
+                    输入 / 输出
+                  </th>
                   <th style={{ width: 84, textAlign: "right" }}>耗时</th>
-                  <th className="col-optional" style={{ width: 76, textAlign: "right" }}>费用</th>
+                  <th className="col-optional" style={{ width: 76, textAlign: "right" }}>
+                    费用
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -155,7 +163,9 @@ export default function Logs({ initialEndpoint }: { initialEndpoint?: string }) 
                       {r.clientProtocol}
                       {r.stream && <span className="stream-tag">流</span>}
                     </td>
-                    <td className="num col-optional">{r.pending ? "…" : `${fmtNum(r.usage.input + r.usage.cacheRead + r.usage.cacheWrite)} / ${fmtNum(r.usage.output)}`}</td>
+                    <td className="num col-optional">
+                      {r.pending ? "…" : `${fmtNum(r.usage.input + r.usage.cacheRead + r.usage.cacheWrite)} / ${fmtNum(r.usage.output)}`}
+                    </td>
                     <td className="num">{r.pending ? "…" : fmtMs(r.durationMs)}</td>
                     <td className="num col-optional">{r.cost ? fmtCost(r.cost) : "—"}</td>
                   </tr>
@@ -253,7 +263,9 @@ function LogDrawer({ id, onClose }: { id: string; onClose: () => void }) {
       : tab === "upstreamRequest"
         ? pretty(b.upstreamRequest)
         : pretty(b[tab]);
-  const curl = b ? `curl -sS ${baseUrl}${r.path.startsWith("/v1beta") ? r.path : r.path} \\\n  -H 'content-type: application/json' \\\n  --data-binary @- <<'EOF'\n${b.clientRequest}\nEOF` : "";
+  const curl = b
+    ? `curl -sS ${baseUrl}${r.path.startsWith("/v1beta") ? r.path : r.path} \\\n  -H 'content-type: application/json' \\\n  --data-binary @- <<'EOF'\n${b.clientRequest}\nEOF`
+    : "";
 
   return (
     <aside className="drawer log-drawer">

@@ -1,16 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, CloudDownload, Plus, Save, Sparkles, TerminalSquare, Trash2, Zap } from "lucide-react";
-import {
-  api,
-  applyModelInfo,
-  AuthMode,
-  EndpointConfig,
-  ModelConfig,
-  newEndpoint,
-  newModel,
-  PROTOCOLS,
-  secretKeys,
-} from "../api";
+import { api, applyModelInfo, AuthMode, EndpointConfig, ModelConfig, newEndpoint, newModel, PROTOCOLS, secretKeys } from "../api";
 import { useApp } from "../App";
 import { ModelChain } from "../components/ModelInput";
 import { Field, SecretInput, Switch, useToast } from "../components/ui";
@@ -35,28 +25,46 @@ const PRESETS: { label: string; ep: Partial<EndpointConfig>; models: string[] }[
     },
     models: [],
   },
-  { label: "Anthropic", ep: { id: "anthropic", name: "Anthropic", protocol: "anthropic", baseUrl: "https://api.anthropic.com" }, models: ["claude-sonnet-4-5", "claude-opus-4-5", "claude-haiku-4-5"] },
+  {
+    label: "Anthropic",
+    ep: { id: "anthropic", name: "Anthropic", protocol: "anthropic", baseUrl: "https://api.anthropic.com" },
+    models: ["claude-sonnet-4-5", "claude-opus-4-5", "claude-haiku-4-5"],
+  },
   { label: "OpenAI", ep: { id: "openai", name: "OpenAI", protocol: "openai_responses", baseUrl: "https://api.openai.com/v1" }, models: ["gpt-5", "gpt-5-codex"] },
   {
     label: "DeepSeek",
-    ep: { id: "ds", name: "DeepSeek", protocol: "openai_chat", baseUrl: "https://api.deepseek.com", compat: { sendReasoningContent: true, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false } },
+    ep: {
+      id: "ds",
+      name: "DeepSeek",
+      protocol: "openai_chat",
+      baseUrl: "https://api.deepseek.com",
+      compat: { sendReasoningContent: true, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
+    },
     models: ["deepseek-chat", "deepseek-reasoner"],
   },
-  { label: "DeepSeek（Anthropic 格式）", ep: { id: "dsa", name: "DeepSeek Anthropic", protocol: "anthropic", baseUrl: "https://api.deepseek.com/anthropic" }, models: ["deepseek-chat"] },
-  { label: "Gemini", ep: { id: "gm", name: "Gemini", protocol: "gemini", baseUrl: "https://generativelanguage.googleapis.com" }, models: ["gemini-2.5-pro", "gemini-2.5-flash"] },
+  {
+    label: "DeepSeek（Anthropic 格式）",
+    ep: { id: "dsa", name: "DeepSeek Anthropic", protocol: "anthropic", baseUrl: "https://api.deepseek.com/anthropic" },
+    models: ["deepseek-chat"],
+  },
+  {
+    label: "Gemini",
+    ep: { id: "gm", name: "Gemini", protocol: "gemini", baseUrl: "https://generativelanguage.googleapis.com" },
+    models: ["gemini-2.5-pro", "gemini-2.5-flash"],
+  },
   { label: "OpenRouter", ep: { id: "or", name: "OpenRouter", protocol: "openai_chat", baseUrl: "https://openrouter.ai/api/v1" }, models: [] },
 ];
 
 const AUTH_OPTIONS: { value: AuthMode; label: string }[] = [
-  { value: "auto", label: "按协议自动" },
-  { value: "bearer", label: "Authorization: Bearer" },
-  { value: "x_api_key", label: "x-api-key" },
-  { value: "goog_api_key", label: "x-goog-api-key" },
-  { value: "none", label: "不带密钥" },
+  { value: "auto", label: "自动（按接口协议）" },
+  { value: "bearer", label: "Bearer Token（Authorization）" },
+  { value: "x_api_key", label: "x-api-key 请求头" },
+  { value: "goog_api_key", label: "x-goog-api-key 请求头" },
+  { value: "none", label: "无需认证" },
 ];
 
 export default function EndpointEditor({ id }: { id: string | null }) {
-  const { config, saveConfig, go } = useApp();
+  const { config, saveConfig, go, setLeaveGuard } = useApp();
   const toast = useToast();
   const original = id ? config.endpoints.find((e) => e.id === id) : undefined;
   const isNew = !original;
@@ -86,7 +94,7 @@ export default function EndpointEditor({ id }: { id: string | null }) {
       const hit = infos.filter(Boolean).length;
       setEp((x) => ({ ...x, models: x.models.map((m, i) => (infos[i] ? applyModelInfo(m, infos[i]!) : m)) }));
       const miss = ep.models.filter((_, i) => !infos[i]).map((m) => m.upstream || m.name);
-      toast(miss.length ? `已填写 ${hit} 个模型；没找到：${miss.join("、")}` : `已填写 ${hit} 个模型的价格和上下文，记得保存`, !hit);
+      toast(miss.length ? `已填充 ${hit} 个模型；未收录：${miss.join("、")}` : `已填充 ${hit} 个模型的价格与上下文，保存后生效`, !hit);
     } catch (e) {
       toast(String(e), true);
     } finally {
@@ -131,7 +139,9 @@ export default function EndpointEditor({ id }: { id: string | null }) {
       const rename = (m: string) => (renamed && m.startsWith(original!.id + "/") ? next.id + m.slice(original!.id.length) : m);
       const endpoints = isNew
         ? [...config.endpoints, next]
-        : config.endpoints.map((e) => (e.id === original!.id ? next : { ...e, fallbacks: e.fallbacks.map(rename), models: e.models.map((m) => ({ ...m, fallbacks: m.fallbacks.map(rename) })) }));
+        : config.endpoints.map((e) =>
+            e.id === original!.id ? next : { ...e, fallbacks: e.fallbacks.map(rename), models: e.models.map((m) => ({ ...m, fallbacks: m.fallbacks.map(rename) })) },
+          );
       await saveConfig({
         ...config,
         endpoints,
@@ -156,7 +166,33 @@ export default function EndpointEditor({ id }: { id: string | null }) {
     setTesting(true);
   };
 
-  const updateModel = (i: number, patch: Partial<ModelConfig>) => set("models", ep.models.map((m, j) => (j === i ? { ...m, ...patch } : m)));
+  // 有没有未保存的修改（和打开时的配置比）
+  const headersOf = (e: EndpointConfig) =>
+    Object.entries(e.headers)
+      .map(([k, v]) => `${k}: ${v}`)
+      .join("\n");
+  const dirty = isNew
+    ? !!(ep.name || ep.baseUrl || ep.models.length)
+    : JSON.stringify(ep) !== JSON.stringify(original) || headersText !== headersOf(original!) || !!apiKey;
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty && !saving;
+  useEffect(() => {
+    setLeaveGuard(() => dirtyRef.current);
+    return () => setLeaveGuard(null);
+  }, [setLeaveGuard]);
+  const discard = () => {
+    if (original) {
+      setEp(structuredClone(original));
+      setHeadersText(headersOf(original));
+    } else setEp(newEndpoint());
+    setApiKey("");
+  };
+
+  const updateModel = (i: number, patch: Partial<ModelConfig>) =>
+    set(
+      "models",
+      ep.models.map((m, j) => (j === i ? { ...m, ...patch } : m)),
+    );
 
   return (
     <div className="page">
@@ -170,6 +206,10 @@ export default function EndpointEditor({ id }: { id: string | null }) {
             <h1 className="page-title">{isNew ? "添加端点" : ep.name || "未命名端点"}</h1>
           </div>
           <div className="header-actions">
+            <label className={`head-toggle ${ep.enabled ? "on" : ""}`} title="停用后网关不再向该端点转发请求，也不会启动其本地服务">
+              <Switch on={ep.enabled} onChange={(v) => set("enabled", v)} />
+              {ep.enabled ? "已启用" : "已停用"}
+            </label>
             {!isNew && (
               <button className="btn" onClick={runTest}>
                 <Zap size={16} />
@@ -210,7 +250,15 @@ export default function EndpointEditor({ id }: { id: string | null }) {
                 }}
               />
             </Field>
-            <Field label="前缀" required help={<>客户端写 <code>{ep.id || "前缀"}/模型名</code> 来使用这个端点</>}>
+            <Field
+              label="模型前缀"
+              required
+              help={
+                <>
+                  客户端通过 <code>{ep.id || "前缀"}/模型 ID</code> 调用该端点
+                </>
+              }
+            >
               <input
                 className="input mono"
                 value={ep.id}
@@ -222,7 +270,7 @@ export default function EndpointEditor({ id }: { id: string | null }) {
               />
             </Field>
             <div className="span-2">
-              <Field label="协议" help="上游服务说的是哪种 API 格式。客户端用什么格式都可以，kiki-proxy 会自动转换">
+              <Field label="接口协议" help="上游服务的 API 格式。客户端可使用任意协议，由网关自动转换">
                 <div className="proto-pick">
                   {PROTOCOLS.map((p) => (
                     <button key={p.value} className={ep.protocol === p.value ? "on" : ""} onClick={() => set("protocol", p.value)}>
@@ -236,26 +284,26 @@ export default function EndpointEditor({ id }: { id: string | null }) {
             </div>
             <div className="span-2">
               <Field
-                label="地址"
+                label="Base URL"
                 required
-                help={ep.process.enabled ? "本地程序监听的地址，例如 http://127.0.0.1:8787" : "带不带 /v1 都可以，例如 https://api.deepseek.com 或 https://api.openai.com/v1"}
+                help={ep.process.enabled ? "本地服务的监听地址，如 http://127.0.0.1:8787" : "可包含或省略 /v1，如 https://api.deepseek.com、https://api.openai.com/v1"}
               >
                 <input className="input mono" value={ep.baseUrl} placeholder="https://" onChange={(e) => set("baseUrl", e.target.value.trim())} />
               </Field>
             </div>
-            <Field label="API Key" help="保存在 macOS 钥匙串里，不会写进配置文件">
+            <Field label="API Key" help="存储于 macOS 钥匙串，不写入配置文件">
               <SecretInput
                 isSet={!!flags[secretKeys.apiKey(ep.id)]}
                 value={apiKey}
                 onChange={setApiKey}
-                placeholder={ep.process.enabled ? "本地程序自己负责登录的话留空" : "sk-..."}
+                placeholder={ep.process.enabled ? "由本地服务负责认证时留空" : "sk-..."}
                 onClear={async () => {
                   await api.setSecret(secretKeys.apiKey(ep.id), "");
                   api.secretFlags(secretNames).then(setFlags);
                 }}
               />
             </Field>
-            <Field label="密钥放在">
+            <Field label="认证方式">
               <select className="select" value={ep.auth} onChange={(e) => set("auth", e.target.value as AuthMode)}>
                 {AUTH_OPTIONS.map((o) => (
                   <option key={o.value} value={o.value}>
@@ -265,16 +313,16 @@ export default function EndpointEditor({ id }: { id: string | null }) {
               </select>
             </Field>
             <Field
-              label="出口"
+              label="网络出口"
               help={
                 /^https?:\/\/(127\.|localhost|\[::1\])/i.test(ep.baseUrl)
-                  ? "这是本机地址，网关会直接连接，不经过任何代理。本地程序自己访问外网走哪条线，在下面的「本地程序」里设置"
-                  : "网关访问这个端点走哪条线路，可在「出口代理」里添加"
+                  ? "本机地址始终直连。本地服务自身的网络在「本地服务」中设置"
+                  : "网关访问该端点使用的线路，可在「出口代理」中添加"
               }
             >
               <select className="select" value={ep.proxy} onChange={(e) => set("proxy", e.target.value)}>
-                <option value="system">跟随系统代理</option>
-                <option value="direct">直连（不走任何代理）</option>
+                <option value="system">系统代理</option>
+                <option value="direct">直连</option>
                 {config.proxies.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name}（{p.kind === "socks5" ? "SOCKS5" : "HTTP"}）
@@ -282,33 +330,28 @@ export default function EndpointEditor({ id }: { id: string | null }) {
                 ))}
               </select>
             </Field>
-            <Field label="启用">
-              <div style={{ height: 38, display: "flex", alignItems: "center" }}>
-                <Switch on={ep.enabled} onChange={(v) => set("enabled", v)} />
-              </div>
-            </Field>
           </div>
         </div>
 
         {/* ---------------------------------------------------------------- 本地程序 */}
         <div className="settings-group">
           <h3>
-            本地程序
-            <span className="h3-hint">由 kiki-proxy 启动并守护一个命令行服务（比如公司内部服务的代理），它负责登录和格式转换</span>
+            本地服务
+            <span className="h3-hint">托管一个命令行服务进程（如内部服务代理），由其负责认证与协议转换</span>
           </h3>
           <div className="panel">
             <div className="setting-row">
               <div className="setting-text">
                 <b>
-                  <TerminalSquare size={14} /> 由 kiki-proxy 启动这个端点背后的程序
+                  <TerminalSquare size={14} /> 托管本地服务进程
                 </b>
-                <span>App 启动时自动运行，挂了自动重启，退出 App 时一起结束；程序自己弹出的浏览器登录照常工作</span>
+                <span>随 App 启动，异常退出后自动重启，App 退出时一并结束</span>
               </div>
               <Switch on={ep.process.enabled} onChange={(v) => set("process", { ...ep.process, enabled: v })} />
             </div>
             {ep.process.enabled && (
               <div className="process-form">
-                <Field label="启动命令" required help="和在终端里敲的一样，可以带参数，也可以写成多行（比如先 export 再运行）。用登录 shell 执行，能用到你终端里的 PATH">
+                <Field label="启动命令" required help="在登录 shell 中执行，可使用终端的 PATH；支持多行">
                   <textarea
                     className="textarea mono"
                     rows={2}
@@ -317,38 +360,30 @@ export default function EndpointEditor({ id }: { id: string | null }) {
                     onChange={(e) => set("process", { ...ep.process, command: e.target.value })}
                   />
                 </Field>
-                <Field label="工作目录" help="留空为用户目录">
-                  <input
-                    className="input mono"
-                    value={ep.process.workdir}
-                    placeholder="~"
-                    onChange={(e) => set("process", { ...ep.process, workdir: e.target.value })}
-                  />
+                <Field label="工作目录" help="默认为用户主目录">
+                  <input className="input mono" value={ep.process.workdir} placeholder="~" onChange={(e) => set("process", { ...ep.process, workdir: e.target.value })} />
                 </Field>
                 <Field
-                  label="本地程序的网络"
+                  label="进程网络"
                   help={
                     ep.process.network === "direct"
-                      ? "启动时去掉 HTTP_PROXY / HTTPS_PROXY / ALL_PROXY 等代理变量，程序直接访问内部服务"
+                      ? "启动时移除 HTTP_PROXY、HTTPS_PROXY、ALL_PROXY 等代理变量"
                       : ep.process.network
-                        ? "启动时把 HTTP_PROXY / HTTPS_PROXY / ALL_PROXY 设成这个代理"
-                        : "和在终端里运行一样：终端里设置了代理变量（比如 ~/.zshrc 里的 HTTPS_PROXY）就会走代理。启动日志里会写明实际走哪条线"
+                        ? "启动时将上述代理变量设置为所选出口代理"
+                        : "继承终端环境中的代理变量（如 ~/.zshrc 中的 HTTPS_PROXY），实际线路见运行日志"
                   }
                 >
                   <select className="select" value={ep.process.network} onChange={(e) => set("process", { ...ep.process, network: e.target.value })}>
-                    <option value="">跟随终端（和在终端里运行一样）</option>
-                    <option value="direct">直连（去掉代理变量）</option>
+                    <option value="">继承终端环境</option>
+                    <option value="direct">直连（移除代理变量）</option>
                     {config.proxies.map((p) => (
                       <option key={p.id} value={p.id}>
-                        经出口代理：{p.name}
+                        出口代理：{p.name}
                       </option>
                     ))}
                   </select>
                 </Field>
-                <Field
-                  label="环境变量"
-                  help="程序会自动带上你终端里的环境变量（包括 ~/.zshrc 里的代理、证书设置）。还需要额外的变量就写在这里，每行一个，优先级最高"
-                >
+                <Field label="环境变量" help="已自动继承终端环境变量。在此追加或覆盖，每行一个 KEY=VALUE">
                   <textarea
                     className="textarea mono"
                     rows={3}
@@ -367,18 +402,18 @@ export default function EndpointEditor({ id }: { id: string | null }) {
         <div className="settings-group">
           <h3>
             模型
-            <span className="h3-hint">没列出的模型名也可以用「{ep.id || "前缀"}/模型名」直接透传</span>
+            <span className="h3-hint">未列出的模型也可通过「{ep.id || "前缀"}/模型 ID」直接透传</span>
           </h3>
           <div className="panel">
             <table className="grid-table">
               <thead>
                 <tr>
-                  <th style={{ width: "18%" }}>网关里的名字</th>
-                  <th style={{ width: "22%" }}>上游真实模型</th>
-                  <th>显示名</th>
+                  <th style={{ width: "18%" }}>模型 ID</th>
+                  <th style={{ width: "22%" }}>上游模型 ID</th>
+                  <th>显示名称</th>
                   <th style={{ width: 96 }}>上下文</th>
-                  <th style={{ width: 56 }}>图片</th>
-                  <th style={{ width: 140 }}>价格 $/M（入 / 出）</th>
+                  <th style={{ width: 56 }}>图像</th>
+                  <th style={{ width: 140 }}>价格 $/M（输入/输出）</th>
                   <th style={{ width: 56 }}>启用</th>
                   <th style={{ width: 36 }} />
                 </tr>
@@ -390,10 +425,20 @@ export default function EndpointEditor({ id }: { id: string | null }) {
                       <input className="input mono" value={m.name} placeholder="sonnet" onChange={(e) => updateModel(i, { name: e.target.value.trim() })} />
                     </td>
                     <td>
-                      <input className="input mono" value={m.upstream} placeholder={m.name || "同左"} onChange={(e) => updateModel(i, { upstream: e.target.value.trim() })} />
+                      <input
+                        className="input mono"
+                        value={m.upstream}
+                        placeholder={m.name || "同模型 ID"}
+                        onChange={(e) => updateModel(i, { upstream: e.target.value.trim() })}
+                      />
                     </td>
                     <td>
-                      <input className="input" value={m.displayName} placeholder={`${ep.id}/${m.name}`} onChange={(e) => updateModel(i, { displayName: e.target.value })} />
+                      <input
+                        className="input"
+                        value={m.displayName}
+                        placeholder={`${ep.id}/${m.name}`}
+                        onChange={(e) => updateModel(i, { displayName: e.target.value })}
+                      />
                     </td>
                     <td>
                       <ContextSelect value={m.contextWindow} onChange={(v) => updateModel(i, { contextWindow: v })} />
@@ -427,7 +472,15 @@ export default function EndpointEditor({ id }: { id: string | null }) {
                       <Switch on={m.enabled} onChange={(v) => updateModel(i, { enabled: v })} />
                     </td>
                     <td>
-                      <button className="icon-btn" onClick={() => set("models", ep.models.filter((_, j) => j !== i))}>
+                      <button
+                        className="icon-btn"
+                        onClick={() =>
+                          set(
+                            "models",
+                            ep.models.filter((_, j) => j !== i),
+                          )
+                        }
+                      >
                         <Trash2 size={15} />
                       </button>
                     </td>
@@ -440,25 +493,20 @@ export default function EndpointEditor({ id }: { id: string | null }) {
                 <Plus size={14} />
                 添加模型
               </button>
-              <button
-                className="btn btn-sm"
-                disabled={isNew}
-                title={isNew ? "先保存端点，才能用 API Key 访问上游" : "调用上游的 /models 接口"}
-                onClick={() => setFetching(true)}
-              >
+              <button className="btn btn-sm" disabled={isNew} title={isNew ? "请先保存端点" : "调用上游的 /models 接口"} onClick={() => setFetching(true)}>
                 <CloudDownload size={14} />
-                从上游获取模型
+                从上游获取
               </button>
               <button className="btn btn-sm" disabled={!ep.models.length || filling} onClick={autoFill}>
                 <Sparkles size={14} />
-                {filling ? "查询中…" : "自动填写价格和上下文"}
+                {filling ? "查询中…" : "填充价格与上下文"}
               </button>
-              <span className="muted-sm foot-note">数据来自 LiteLLM 公开价格表；内部模型查不到的需要手动填</span>
+              <span className="muted-sm foot-note">数据来源：LiteLLM 公开价格表；未收录的模型需手动填写</span>
             </div>
           </div>
           {ep.models.some((m) => m.contextWindow >= 1_000_000) && (
             <p className="muted-sm" style={{ margin: "8px 4px 0" }}>
-              上下文 ≥ 1M 的模型，在 Claude Code 的 /model 里会带 <code>[1m]</code> 后缀，按 1M 上下文使用；Anthropic 端点还会自动加上 1M 的 beta 开关。
+              上下文 ≥ 1M 的模型在 Claude Code 中以 <code>[1m]</code> 后缀列出并按 1M 上下文使用；Anthropic 端点会自动附加 1M beta 标头。
             </p>
           )}
         </div>
@@ -556,11 +604,20 @@ export default function EndpointEditor({ id }: { id: string | null }) {
           </div>
         </div>
       </div>
-      {testing && (
-        <TestDialog
-          endpoint={ep}
-          onClose={() => setTesting(false)}
-        />
+      {testing && <TestDialog endpoint={ep} onClose={() => setTesting(false)} />}
+      {dirty && (
+        <div className="unsaved-bar">
+          <span>
+            <i className="sdot warn" />
+            {isNew ? "端点尚未添加" : "有未保存的修改"}
+          </span>
+          <button className="btn btn-sm btn-ghost" onClick={discard}>
+            放弃修改
+          </button>
+          <button className="btn btn-sm btn-primary" onClick={() => save(true)} disabled={saving}>
+            {isNew ? "添加" : "保存"}
+          </button>
+        </div>
       )}
       {fetching && (
         <UpstreamModelsDialog
@@ -570,7 +627,7 @@ export default function EndpointEditor({ id }: { id: string | null }) {
           onAdd={(models) => {
             setEp((x) => ({ ...x, models: [...x.models, ...models] }));
             setFetching(false);
-            toast(`已添加 ${models.length} 个模型，记得保存`);
+            toast(`已添加 ${models.length} 个模型，保存后生效`);
           }}
         />
       )}

@@ -1,19 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import {
-  BarChart3,
-  GitBranch,
-  Globe,
-  LayoutDashboard,
-  Pause,
-  Play,
-  Plus,
-  ScrollText,
-  Server,
-  Settings as SettingsIcon,
-  TerminalSquare,
-} from "lucide-react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { BarChart3, GitBranch, Globe, LayoutDashboard, Pause, Play, Plus, ScrollText, Server, Settings as SettingsIcon, TerminalSquare } from "lucide-react";
 import { api, Config, listen, ListedModel, ServerStatus } from "./api";
-import { CopyButton, StatusDot, ToastProvider, useToast } from "./components/ui";
+import { CopyButton, Modal, StatusDot, ToastProvider, useToast } from "./components/ui";
 import Overview from "./pages/Overview";
 import Endpoints from "./pages/Endpoints";
 import EndpointEditor from "./pages/EndpointEditor";
@@ -44,6 +32,8 @@ interface AppCtx {
   models: ListedModel[];
   route: Route;
   go: (r: Route) => void;
+  /** 页面有未保存的修改时注册；切换页面前会先确认 */
+  setLeaveGuard: (g: (() => boolean) | null) => void;
   dark: boolean;
   baseUrl: string;
 }
@@ -77,7 +67,10 @@ function Shell() {
   }, [dark]);
 
   useEffect(() => {
-    api.getConfig().then(setConfig).catch((e) => toast(String(e), true));
+    api
+      .getConfig()
+      .then(setConfig)
+      .catch((e) => toast(String(e), true));
     api.getStatus().then(setStatus);
     api.listModels().then(setModels);
   }, [toast]);
@@ -106,7 +99,15 @@ function Shell() {
     [toast],
   );
 
-  const go = useCallback((r: Route) => setRoute(r), []);
+  const guard = useRef<(() => boolean) | null>(null);
+  const [pending, setPending] = useState<Route | null>(null);
+  const go = useCallback((r: Route) => {
+    if (guard.current?.()) setPending(r);
+    else setRoute(r);
+  }, []);
+  const setLeaveGuard = useCallback((g: (() => boolean) | null) => {
+    guard.current = g;
+  }, []);
 
   const ctx = useMemo<AppCtx | null>(
     () =>
@@ -118,10 +119,11 @@ function Shell() {
         models,
         route,
         go,
+        setLeaveGuard,
         dark,
         baseUrl: `http://127.0.0.1:${status.port || config.server.port}`,
       },
-    [config, saveConfig, status, models, route, go, dark],
+    [config, saveConfig, status, models, route, go, setLeaveGuard, dark],
   );
 
   if (!ctx) return <div className="app" />;
@@ -227,6 +229,31 @@ function Shell() {
           {route.name === "clients" && <Clients />}
           {route.name === "settings" && <SettingsPage />}
         </main>
+        {pending && (
+          <Modal
+            title="放弃未保存的修改？"
+            onClose={() => setPending(null)}
+            footer={
+              <>
+                <button className="btn" onClick={() => setPending(null)}>
+                  继续编辑
+                </button>
+                <button
+                  className="btn btn-danger"
+                  onClick={() => {
+                    guard.current = null;
+                    setRoute(pending);
+                    setPending(null);
+                  }}
+                >
+                  放弃修改
+                </button>
+              </>
+            }
+          >
+            <p style={{ margin: 0 }}>当前页面有尚未保存的修改，离开后这些修改将丢失。</p>
+          </Modal>
+        )}
       </div>
     </Ctx.Provider>
   );

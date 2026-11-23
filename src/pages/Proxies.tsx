@@ -28,7 +28,7 @@ export default function Proxies() {
           <b>{name}</b>
           <span className="mono-sm">{desc}</span>
           <div className="proxy-used">
-            {eps.length ? eps.map((e) => <span key={e.id} className="tag">{e.name}</span>) : <span className="muted-sm">没有端点使用</span>}
+            {eps.length ? eps.map((e) => <span key={e.id} className="tag">{e.name}</span>) : <span className="muted-sm">未被使用</span>}
           </div>
         </div>
         <div className="proxy-side">
@@ -54,7 +54,7 @@ export default function Proxies() {
         <div className="page-header">
           <div>
             <h1 className="page-title">出口代理</h1>
-            <div className="page-subtitle">每个端点可以走不同的线路：内部服务直连，官方 API 走代理</div>
+            <div className="page-subtitle">为不同端点指定网络线路，如内部服务直连、官方 API 经代理访问</div>
           </div>
           <div className="header-actions">
             <button className="btn btn-primary" onClick={() => setEditing("new")}>
@@ -64,8 +64,8 @@ export default function Proxies() {
           </div>
         </div>
         <div className="proxy-list">
-          {card("direct", "直连", "不经过任何代理，即使系统开了代理也不走", <Shield size={18} />)}
-          {card("system", "跟随系统代理", "使用 macOS 网络设置里的代理（以及 HTTPS_PROXY 等环境变量）", <Laptop size={18} />)}
+          {card("direct", "直连", "不经过任何代理，忽略系统代理设置", <Shield size={18} />)}
+          {card("system", "系统代理", "使用 macOS 网络设置中的代理及 HTTPS_PROXY 等环境变量", <Laptop size={18} />)}
           {config.proxies.map((p) =>
             card(
               p.id,
@@ -84,7 +84,7 @@ export default function Proxies() {
           )}
         </div>
         <p className="muted-sm" style={{ marginTop: 16 }}>
-          测试会通过该线路访问 <code>{config.ui.probeUrl}</code>，可以在设置里修改。SOCKS5 代理由代理端负责解析域名，可以访问内网域名。
+          测试时通过该线路访问 <code>{config.ui.probeUrl}</code>（可在设置中修改）。SOCKS5 代理由代理端解析域名，支持访问内网域名。
         </p>
       </div>
       {editing && (
@@ -102,7 +102,7 @@ export default function Proxies() {
       {del && (
         <Confirm
           title={`删除「${del.name}」？`}
-          message={usedBy(del.id).length ? `正在使用它的端点会改为「跟随系统代理」：${usedBy(del.id).map((e) => e.name).join("、")}` : "这个代理没有被使用。"}
+          message={usedBy(del.id).length ? `使用该代理的端点将改为「系统代理」：${usedBy(del.id).map((e) => e.name).join("、")}` : "该代理未被任何端点使用。"}
           danger
           confirmText="删除"
           onClose={() => setDel(null)}
@@ -133,7 +133,7 @@ function ProxyDialog(props: { initial: ProxyConfig | null; onClose: () => void; 
   const submit = async () => {
     const id = props.initial?.id || slugify(p.name) || `proxy${config.proxies.length + 1}`;
     if (!p.name || !p.url) return toast("请填写名称和地址", true);
-    if (!props.initial && (config.proxies.some((x) => x.id === id) || id === "direct" || id === "system")) return toast("名称和已有代理重复了", true);
+    if (!props.initial && (config.proxies.some((x) => x.id === id) || id === "direct" || id === "system")) return toast("名称与已有代理重复", true);
     await props.onSave({ ...p, id }, password ? password : null);
   };
 
