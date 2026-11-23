@@ -56,7 +56,7 @@ impl Clients {
     }
 }
 
-fn proxy_url(kind: ProxyKind, raw: &str) -> String {
+pub(crate) fn proxy_url(kind: ProxyKind, raw: &str) -> String {
     let raw = raw.trim();
     if raw.contains("://") {
         // socks5:// 改成 socks5h://，让代理负责 DNS 解析（访问内网域名时需要）
@@ -75,6 +75,23 @@ fn is_versioned(seg: &str) -> bool {
 
 /// 根据端点的 base_url 拼出请求地址。
 /// base_url 可以带也可以不带版本号：`https://api.openai.com` 和 `https://api.openai.com/v1` 都行。
+/// 本机地址（127.0.0.1、localhost、::1）：网关访问它们时一律直连，不经过任何代理
+pub fn is_loopback(base_url: &str) -> bool {
+    url::Url::parse(base_url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.trim_matches(['[', ']']).to_lowercase()))
+        .is_some_and(|h| h == "localhost" || h == "::1" || h.starts_with("127."))
+}
+
+/// 端点实际使用的出口：本机地址强制直连
+pub fn effective_proxy<'a>(base_url: &str, proxy: &'a str) -> &'a str {
+    if is_loopback(base_url) {
+        PROXY_DIRECT
+    } else {
+        proxy
+    }
+}
+
 pub fn upstream_url(base: &str, p: Protocol, model: &str, stream: bool, count_tokens: bool) -> String {
     let b = base.trim().trim_end_matches('/');
     let versioned = b.rsplit('/').next().is_some_and(is_versioned);
@@ -172,6 +189,16 @@ mod tests {
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse"
         );
         assert_eq!(upstream_url("https://x.com/api/v3", Protocol::OpenaiResponses, "", true, false), "https://x.com/api/v3/responses");
+    }
+
+    #[test]
+    fn loopback_is_always_direct() {
+        assert!(is_loopback("http://127.0.0.1:8787"));
+        assert!(is_loopback("http://localhost:8787/v1"));
+        assert!(is_loopback("http://[::1]:8787"));
+        assert!(!is_loopback("https://llm.corp.example"));
+        assert_eq!(effective_proxy("http://127.0.0.1:8787", "system"), "direct");
+        assert_eq!(effective_proxy("https://api.anthropic.com", "clash"), "clash");
     }
 
     #[test]

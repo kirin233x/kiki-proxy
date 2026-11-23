@@ -347,3 +347,32 @@ async fn stepwise_test_report() {
     assert_eq!(r.steps[0].status, "fail");
     assert!(!r.ok);
 }
+
+/// 出口设成直连后保存，从磁盘重新读出来还是直连（用户反馈「直连变回了系统代理」）
+#[tokio::test]
+async fn direct_proxy_setting_persists() {
+    let dir = std::env::temp_dir().join(format!("kiki-persist-{}", new_id("")));
+    let gw = Gateway::new(&dir, Arc::new(MemorySecrets::default())).unwrap();
+    let mut cfg = (*gw.config()).clone();
+    cfg.endpoints.push(EndpointConfig {
+        id: "internal".into(),
+        name: "内部".into(),
+        base_url: "http://127.0.0.1:8787".into(),
+        proxy: PROXY_DIRECT.into(),
+        process: ProcessConfig { enabled: false, command: "cc-proxy".into(), network: "direct".into(), ..Default::default() },
+        ..Default::default()
+    });
+    gw.save_config(cfg).await.unwrap();
+    let toml = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+    assert!(toml.contains("proxy = \"direct\""), "{toml}");
+    // 模拟重启 App：重新读配置文件
+    let gw2 = Gateway::new(&dir, Arc::new(MemorySecrets::default())).unwrap();
+    let ep = gw2.config().endpoint("internal").cloned().unwrap();
+    assert_eq!(ep.proxy, "direct");
+    assert_eq!(ep.process.network, "direct");
+    // 启动 / 暂停网关都不改配置
+    gw2.start().await.ok();
+    gw2.stop().await;
+    assert_eq!(gw2.config().endpoint("internal").unwrap().proxy, "direct");
+    assert!(std::fs::read_to_string(dir.join("config.toml")).unwrap().contains("proxy = \"direct\""));
+}

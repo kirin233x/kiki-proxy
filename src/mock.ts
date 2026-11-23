@@ -38,7 +38,7 @@ let config: Config = {
       baseUrl: "http://127.0.0.1:8787",
       auth: "none",
       proxy: "direct",
-      process: { enabled: true, command: "~/bin/cc-proxy --port 8787", workdir: "", env: "" },
+      process: { enabled: true, command: "~/bin/cc-proxy --port 8787", workdir: "", env: "", network: "" },
       headers: {},
       timeoutSecs: 300,
       compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
@@ -57,7 +57,7 @@ let config: Config = {
       baseUrl: "https://api.anthropic.com",
       auth: "auto",
       proxy: "clash",
-      process: { enabled: false, command: "", workdir: "", env: "" },
+      process: { enabled: false, command: "", workdir: "", env: "", network: "" },
       headers: {},
       timeoutSecs: 300,
       compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
@@ -76,7 +76,7 @@ let config: Config = {
       baseUrl: "https://api.deepseek.com",
       auth: "auto",
       proxy: "direct",
-      process: { enabled: false, command: "", workdir: "", env: "" },
+      process: { enabled: false, command: "", workdir: "", env: "", network: "" },
       headers: {},
       timeoutSecs: 300,
       compat: { sendReasoningContent: true, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
@@ -95,7 +95,7 @@ let config: Config = {
       baseUrl: "https://generativelanguage.googleapis.com",
       auth: "auto",
       proxy: "clash",
-      process: { enabled: false, command: "", workdir: "", env: "" },
+      process: { enabled: false, command: "", workdir: "", env: "", network: "" },
       headers: {},
       timeoutSecs: 300,
       compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
@@ -303,6 +303,29 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
       return r(null);
     case "export_desktop_config":
       return r("/Users/kirin/Downloads/kiki-proxy-claude-desktop.json");
+    case "inspect_claude":
+      return r({
+        files: [
+          {
+            path: "/Users/kirin/.claude/settings.json",
+            modified: Date.now() - 4000,
+            entries: [
+              ["ANTHROPIC_BASE_URL", "http://127.0.0.1:41521"],
+              ["ANTHROPIC_MODEL", "internal/sonnet[1m]"],
+              ["ANTHROPIC_DEFAULT_OPUS_MODEL", "gpt-6.2-sol[1M]"],
+              ["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", "gpt-6.2-sol"],
+            ],
+          },
+        ],
+        issues: [
+          {
+            file: "/Users/kirin/.claude/settings.json",
+            key: "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            value: "gpt-6.2-sol[1M]",
+            problem: "不是网关里的模型名，会被默认模型转到 internal/sonnet",
+          },
+        ],
+      });
     case "desktop_connected":
       return r(false);
     case "test_endpoint":

@@ -284,6 +284,8 @@ pub struct ProcessConfig {
     pub workdir: String,
     /// 额外的环境变量，每行一个 KEY=VALUE（优先于从终端读到的）
     pub env: String,
+    /// 本地程序自己访问外网走哪条线：空 = 跟随终端里的代理变量；`direct` = 去掉代理变量；其他 = 某个出口代理的 id
+    pub network: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

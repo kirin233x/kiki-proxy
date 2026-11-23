@@ -66,6 +66,8 @@ export interface ProcessConfig {
   workdir: string;
   /** 额外的环境变量，每行一个 KEY=VALUE */
   env: string;
+  /** 本地程序自己访问外网：空 = 跟随终端；direct = 去掉代理变量；其他 = 出口代理 id */
+  network: string;
 }
 
 export interface ProcessStatus {
@@ -241,6 +243,18 @@ export interface ApplyReport {
   changes: string[];
 }
 
+export interface ConfigIssue {
+  file: string;
+  key: string;
+  value: string;
+  problem: string;
+}
+
+export interface ClaudeInspection {
+  files: { path: string; modified: number; entries: [string, string][] }[];
+  issues: ConfigIssue[];
+}
+
 export interface DesktopModel {
   name: string;
   label: string;
@@ -364,6 +378,8 @@ export const api = {
   /** 生成 Claude 桌面版可导入的配置文件，返回文件路径 */
   exportDesktopConfig: (models: DesktopModel[]) => invoke<string>("export_desktop_config", { models }),
   desktopConnected: () => invoke<boolean>("desktop_connected"),
+  /** 检查 Claude Code 实际会读到的配置 */
+  inspectClaude: () => invoke<ClaudeInspection>("inspect_claude"),
 
   getAutostart: () => invoke<boolean>("get_autostart"),
   setAutostart: (enabled: boolean) => invoke<void>("set_autostart", { enabled }),
@@ -390,7 +406,7 @@ export function newEndpoint(): EndpointConfig {
     baseUrl: "",
     auth: "auto",
     proxy: "system",
-    process: { enabled: false, command: "", workdir: "", env: "" },
+    process: { enabled: false, command: "", workdir: "", env: "", network: "" },
     headers: {},
     timeoutSecs: 300,
     compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },

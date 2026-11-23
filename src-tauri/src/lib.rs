@@ -298,6 +298,11 @@ fn export_desktop_config(app: AppHandle, state: State<AppState>, models: Vec<cli
 }
 
 #[tauri::command]
+fn inspect_claude(state: State<AppState>) -> clients::ClaudeInspection {
+    clients::inspect_claude(&state.gateway.config())
+}
+
+#[tauri::command]
 fn desktop_connected(state: State<AppState>) -> bool {
     clients::desktop_connected(state.gateway.config().server.port)
 }
@@ -481,6 +486,7 @@ pub fn run() {
             restore_client,
             export_desktop_config,
             desktop_connected,
+            inspect_claude,
             process_status,
             restart_process,
             start_process,

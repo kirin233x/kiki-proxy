@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useMemo, useState } from "react";
 import { Check, Download, FileJson, RotateCcw } from "lucide-react";
-import { api, ApplyOptions, ApplyReport, ClientInfo, DesktopModel, fmtContext } from "../api";
+import { api, ApplyOptions, ApplyReport, ClaudeInspection, ClientInfo, DesktopModel, fmtContext } from "../api";
 import { useApp } from "../App";
 import ModelInput from "../components/ModelInput";
 import { CopyButton, Modal, Switch, useToast } from "../components/ui";
@@ -138,6 +138,7 @@ export default function Clients() {
                 </select>
               </Row>
             </div>
+            <ClaudeCheck refreshKey={report} />
             <div className="cc-switches">
               <SwitchRow
                 on={o("claude").discovery}
@@ -435,5 +436,52 @@ function DesktopCard(props: { baseUrl: string; apiKey: string }) {
         </div>
       </div>
     </ClientCard>
+  );
+}
+
+/** 实时检查 Claude Code 会读到的配置：哪些项没指向网关、用了网关里没有的模型、会绕开网关 */
+function ClaudeCheck(props: { refreshKey: unknown }) {
+  const [r, setR] = useState<ClaudeInspection | null>(null);
+  const [appliedAt, setAppliedAt] = useState(0);
+  useEffect(() => {
+    if (props.refreshKey) setAppliedAt(Date.now());
+  }, [props.refreshKey]);
+  useEffect(() => {
+    let alive = true;
+    const tick = () => api.inspectClaude().then((x) => alive && setR(x)).catch(() => {});
+    tick();
+    const t = setInterval(tick, 3000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+  if (!r) return null;
+  // 接入之后文件又被改了（比如 cc-switch 把它的配置写了回去）
+  const touched = appliedAt > 0 && r.files.some((f) => f.modified > appliedAt + 1500);
+  return (
+    <div className={`cc-check ${r.issues.length ? "bad" : "ok"}`}>
+      <div className="cc-check-head">
+        <b>{r.issues.length ? `当前生效的配置有 ${r.issues.length} 处问题` : "当前生效的配置没有问题"}</b>
+        <span>实时读取 {r.files.map((f) => f.path.replace(/^\/Users\/[^/]+/, "~")).join("、") || "（没有找到配置文件）"}</span>
+      </div>
+      {touched && (
+        <div className="cc-check-warn">
+          接入之后，配置文件又被别的程序改动过。如果 cc-switch 之类的工具还在运行，它可能会把自己的配置写回去，请先退出它，再点一次「更新配置」。
+        </div>
+      )}
+      {r.issues.length > 0 && (
+        <ul>
+          {r.issues.map((i, k) => (
+            <li key={k}>
+              <code>{i.key}</code>
+              {i.value && <code className="val">{i.value}</code>}
+              <span>{i.problem}</span>
+              {r.files.length > 1 && <em>{i.file.replace(/^\/Users\/[^/]+/, "~")}</em>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

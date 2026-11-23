@@ -636,6 +636,16 @@ mod tests {
         assert!(all.contains("ANTHROPIC_DEFAULT_OPUS_MODEL：gpt-6.2-sol[1M] → internal/sonnet[1m]"), "{all}");
         assert!(!all.contains("sk-old"), "{all}");
         assert!(home.join(".claude/settings.json.kiki-backup").exists());
+
+        // 接入后检查应该干净；模拟别的程序（比如 cc-switch）把旧配置写回去，检查要能查出来
+        assert!(inspect_claude(&cfg).issues.is_empty(), "{:?}", inspect_claude(&cfg).issues);
+        let mut v2 = v.clone();
+        v2["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = json!("gpt-6.2-sol[1M]");
+        v2["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"] = json!("gpt-6.2-sol");
+        std::fs::write(home.join(".claude/settings.json"), v2.to_string()).unwrap();
+        let found: Vec<String> = inspect_claude(&cfg).issues.into_iter().map(|i| i.key).collect();
+        assert!(found.contains(&"ANTHROPIC_DEFAULT_OPUS_MODEL".to_string()), "{found:?}");
+        assert!(found.contains(&"ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME".to_string()), "{found:?}");
     }
 
     #[test]
@@ -654,4 +664,145 @@ mod tests {
         assert_eq!(v["inferenceModels"][0], json!({"name":"claude@internal/sonnet","labelOverride":"Sonnet（内部）","supports1m":true}));
         assert_eq!(v["inferenceModels"][1], json!({"name":"anthropic/claude-haiku-4-5"}));
     }
+}
+
+// ------------------------------------------------------------------ Claude Code 当前生效配置检查
+
+/// 一个会让 Claude Code 不按网关来的配置项
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigIssue {
+    pub file: String,
+    pub key: String,
+    pub value: String,
+    pub problem: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigFileState {
+    pub path: String,
+    /// 最后修改时间（毫秒）
+    pub modified: i64,
+    /// 这个文件里关于模型、地址的设置（键 → 值，密钥打码）
+    pub entries: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeInspection {
+    pub files: Vec<ConfigFileState>,
+    pub issues: Vec<ConfigIssue>,
+}
+
+/// Claude Code 会读的配置文件（优先级从高到低）
+fn claude_files() -> Vec<PathBuf> {
+    let mut v = vec![PathBuf::from("/Library/Application Support/ClaudeCode/managed-settings.json")];
+    if let Ok(h) = home() {
+        v.push(h.join(".claude/settings.local.json"));
+        v.push(h.join(".claude/settings.json"));
+    }
+    v
+}
+
+const MODEL_KEYS: [&str; 7] = [
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "ANTHROPIC_SMALL_FAST_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+];
+const BYPASS_KEYS: [&str; 4] = ["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_MANTLE"];
+
+/// 检查一个模型名：网关里能不能直接找到；找不到的话会被规则 / 兜底模型接走还是直接报错
+fn model_problem(cfg: &crate::config::Config, v: &str) -> Option<String> {
+    let n = crate::router::normalize_name(v);
+    if crate::router::resolve_direct(cfg, &n).is_some() {
+        return None;
+    }
+    Some(match crate::router::resolve(cfg, v, crate::ir::Protocol::Anthropic) {
+        Ok(t) => format!("不是网关里的模型名，会被{}转到 {}", t.rule.as_deref().unwrap_or("路由"), t.gateway_model),
+        Err(_) => "不是网关里的模型名，用到这一档时请求会失败".into(),
+    })
+}
+
+pub fn inspect_claude(cfg: &crate::config::Config) -> ClaudeInspection {
+    let base = base_url(cfg.server.port);
+    let mut files = Vec::new();
+    let mut issues = Vec::new();
+    for p in claude_files() {
+        let Ok(fs_meta) = std::fs::metadata(&p) else { continue };
+        let file = p.display().to_string();
+        let modified = fs_meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let v = match read_json(&p) {
+            Ok(v) => v,
+            Err(e) => {
+                issues.push(ConfigIssue { file: file.clone(), key: "（整个文件）".into(), value: String::new(), problem: e.to_string() });
+                continue;
+            }
+        };
+        let mut entries = Vec::new();
+        let mut issue = |key: &str, value: &str, problem: String| {
+            issues.push(ConfigIssue { file: file.clone(), key: key.into(), value: value.into(), problem });
+        };
+        if let Some(m) = v.get("model").and_then(Value::as_str) {
+            entries.push(("model".to_string(), m.to_string()));
+            if let Some(pb) = model_problem(cfg, m) {
+                issue("model", m, pb);
+            }
+        }
+        if v.get("apiKeyHelper").is_some() {
+            entries.push(("apiKeyHelper".to_string(), "••••".to_string()));
+            issue("apiKeyHelper", "••••", "会顶掉网关用的 token".into());
+        }
+        let Some(env) = v.get("env").and_then(Value::as_object) else {
+            files.push(ConfigFileState { path: file, modified, entries });
+            continue;
+        };
+        let mut keys: Vec<&String> = env.keys().filter(|k| k.starts_with("ANTHROPIC_") || k.starts_with("CLAUDE_CODE_")).collect();
+        keys.sort();
+        for k in keys {
+            let val = env[k].as_str().map(str::to_string).unwrap_or_else(|| env[k].to_string());
+            entries.push((k.clone(), if is_secret(k) { "••••".into() } else { val.clone() }));
+            if k == "ANTHROPIC_BASE_URL" && val.trim_end_matches('/') != base {
+                issue(k, &val, format!("没有指向 kiki-proxy（{base}）"));
+            }
+            if BYPASS_KEYS.contains(&k.as_str()) {
+                issue(k, &val, "会让 Claude Code 绕过网关直连云服务".into());
+            }
+            if MODEL_KEYS.contains(&k.as_str()) {
+                if let Some(pb) = model_problem(cfg, &val) {
+                    issue(k, &val, pb);
+                }
+            }
+            if k == "ANTHROPIC_API_KEY" && env.contains_key("ANTHROPIC_AUTH_TOKEN") {
+                issue(k, "••••", "和 ANTHROPIC_AUTH_TOKEN 同时存在，Claude Code 会提示冲突".into());
+            }
+        }
+        // 显示名和实际模型对不上（比如模型已经换成网关的，名字还是旧的）
+        for tier in ["OPUS", "SONNET", "HAIKU", "FABLE"] {
+            let (Some(m), Some(name)) = (
+                env.get(&format!("ANTHROPIC_DEFAULT_{tier}_MODEL")).and_then(Value::as_str),
+                env.get(&format!("ANTHROPIC_DEFAULT_{tier}_MODEL_NAME")).and_then(Value::as_str),
+            ) else {
+                continue;
+            };
+            let m_ok = model_problem(cfg, m).is_none();
+            if m_ok && model_problem(cfg, name).is_some() && !name.contains(&crate::router::normalize_name(m)) {
+                let want = meta(cfg, m).name;
+                if name != want {
+                    issue(&format!("ANTHROPIC_DEFAULT_{tier}_MODEL_NAME"), name, format!("显示名和实际模型（{m}）对不上，/model 里会显示错的名字"));
+                }
+            }
+        }
+        files.push(ConfigFileState { path: file, modified, entries });
+    }
+    ClaudeInspection { files, issues }
 }

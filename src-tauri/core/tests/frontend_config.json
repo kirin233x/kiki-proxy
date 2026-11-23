@@ -56,7 +56,8 @@
         "enabled": true,
         "command": "~/bin/cc-proxy --port 8787",
         "workdir": "",
-        "env": ""
+        "env": "",
+        "network": ""
       },
       "headers": {},
       "timeoutSecs": 300,
@@ -116,7 +117,8 @@
         "enabled": false,
         "command": "",
         "workdir": "",
-        "env": ""
+        "env": "",
+        "network": ""
       },
       "headers": {},
       "timeoutSecs": 300,
@@ -173,7 +175,8 @@
         "enabled": false,
         "command": "",
         "workdir": "",
-        "env": ""
+        "env": "",
+        "network": ""
       },
       "headers": {},
       "timeoutSecs": 300,
@@ -230,7 +233,8 @@
         "enabled": false,
         "command": "",
         "workdir": "",
-        "env": ""
+        "env": "",
+        "network": ""
       },
       "headers": {},
       "timeoutSecs": 300,

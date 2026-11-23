@@ -28,7 +28,21 @@ struct Spec {
     command: String,
     workdir: String,
     env: Vec<(String, String)>,
+    network: Network,
 }
+
+/// 本地程序自己访问外网的方式
+#[derive(Debug, Clone, PartialEq)]
+enum Network {
+    /// 跟随终端里的代理变量
+    Inherit,
+    /// 去掉所有代理变量
+    Direct,
+    /// 用某个出口代理：(显示名, 代理地址)
+    Proxy(String, String),
+}
+
+const PROXY_VARS: [&str; 6] = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"];
 
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -97,7 +111,28 @@ fn parse_env(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-fn spec_of(cfg: &Config) -> HashMap<String, Spec> {
+fn network_of(cfg: &Config, secrets: &dyn crate::secrets::SecretStore, id: &str) -> Network {
+    match id {
+        "" | crate::config::PROXY_SYSTEM => Network::Inherit,
+        crate::config::PROXY_DIRECT => Network::Direct,
+        id => match cfg.proxy(id) {
+            Some(p) => {
+                let mut url = crate::upstream::proxy_url(p.kind, &p.url);
+                if !p.username.is_empty() {
+                    let pwd = secrets.get(&crate::secrets::keys::proxy_password(id)).ok().flatten().unwrap_or_default();
+                    if let Some((scheme, rest)) = url.split_once("://") {
+                        let enc = |s: &str| url::form_urlencoded::byte_serialize(s.as_bytes()).collect::<String>();
+                        url = format!("{scheme}://{}:{}@{rest}", enc(&p.username), enc(&pwd));
+                    }
+                }
+                Network::Proxy(p.name.clone(), url)
+            }
+            None => Network::Inherit,
+        },
+    }
+}
+
+fn spec_of(cfg: &Config, secrets: &dyn crate::secrets::SecretStore) -> HashMap<String, Spec> {
     cfg.endpoints
         .iter()
         .filter(|e| e.enabled && e.process.enabled && !e.process.command.trim().is_empty())
@@ -108,6 +143,7 @@ fn spec_of(cfg: &Config) -> HashMap<String, Spec> {
                     command: e.process.command.trim().to_string(),
                     workdir: e.process.workdir.trim().to_string(),
                     env: parse_env(&e.process.env),
+                    network: network_of(cfg, secrets, &e.process.network),
                 },
             )
         })
@@ -176,6 +212,42 @@ async fn capture_shell_env() -> Result<HashMap<String, String>, String> {
         .collect())
 }
 
+/// 按「本地程序的网络」设置改写代理变量
+fn apply_network(envs: &mut HashMap<String, String>, n: &Network) {
+    match n {
+        Network::Inherit => {}
+        Network::Direct => {
+            for k in PROXY_VARS {
+                envs.remove(k);
+            }
+            envs.insert("NO_PROXY".into(), "*".into());
+            envs.insert("no_proxy".into(), "*".into());
+        }
+        Network::Proxy(_, url) => {
+            for k in PROXY_VARS {
+                envs.insert(k.into(), url.clone());
+            }
+            envs.insert("NO_PROXY".into(), "localhost,127.0.0.1,::1".into());
+            envs.insert("no_proxy".into(), "localhost,127.0.0.1,::1".into());
+        }
+    }
+}
+
+fn describe_network(n: &Network, envs: &HashMap<String, String>) -> String {
+    match n {
+        Network::Direct => "直连（已去掉所有代理变量）".into(),
+        Network::Proxy(name, _) => format!("经出口代理「{name}」（已设置 HTTP_PROXY / HTTPS_PROXY / ALL_PROXY）"),
+        Network::Inherit => {
+            let set: Vec<&str> = PROXY_VARS.iter().copied().filter(|k| envs.get(*k).is_some_and(|v| !v.is_empty())).collect();
+            if set.is_empty() {
+                "跟随终端：终端里没有设置代理变量，程序会直连".into()
+            } else {
+                format!("跟随终端：会走终端里的代理（{}）。想让它直连，把端点里「本地程序的网络」改成直连", set.join("、"))
+            }
+        }
+    }
+}
+
 /// 和网络 / 证书有关的变量名，用来在日志里提示
 fn network_vars<'a>(keys: impl Iterator<Item = &'a String>) -> Vec<String> {
     let mut v: Vec<String> = keys
@@ -218,8 +290,8 @@ impl Processes {
     }
 
     /// 配置变了：记下需要运行的程序，然后对齐
-    pub fn sync(self: &Arc<Self>, cfg: &Config) {
-        let want = spec_of(cfg);
+    pub fn sync(self: &Arc<Self>, cfg: &Config, secrets: &dyn crate::secrets::SecretStore) {
+        let want = spec_of(cfg, secrets);
         {
             // 命令改了：之前因为连续失败放弃的，给一次新机会
             let old = self.want.lock();
@@ -425,6 +497,7 @@ impl Processes {
                 match me.shell_env().await {
                     Ok(env) => {
                         envs.extend(env);
+                        apply_network(&mut envs, &spec.network);
                         envs.extend(spec.env.iter().cloned());
                         let net = network_vars(envs.keys());
                         me.log(
@@ -438,10 +511,12 @@ impl Processes {
                         );
                     }
                     Err(e) => {
+                        apply_network(&mut envs, &spec.network);
                         envs.extend(spec.env.iter().cloned());
                         me.log(&id, format!("[kiki-proxy {}] 读取终端环境变量失败（{e}），只用登录 shell 的环境", now_hms()));
                     }
                 }
+                me.log(&id, format!("[kiki-proxy {}] 网络：{}", now_hms(), describe_network(&spec.network, &envs)));
                 me.log(&id, format!("[kiki-proxy {}] 启动：{}", now_hms(), spec.command));
                 let mut cmd = tokio::process::Command::new(shell());
                 cmd.arg("-lc")
@@ -451,6 +526,11 @@ impl Processes {
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .kill_on_drop(true);
+                if spec.network == Network::Direct {
+                    for k in PROXY_VARS {
+                        cmd.env_remove(k);
+                    }
+                }
                 if !spec.workdir.is_empty() {
                     cmd.current_dir(expand_home(&spec.workdir));
                 } else if let Ok(h) = std::env::var("HOME") {
@@ -596,10 +676,46 @@ mod tests {
             id: "local".into(),
             name: "本地".into(),
             base_url: "http://127.0.0.1:1".into(),
-            process: ProcessConfig { enabled: true, command: cmd.into(), workdir: String::new(), env: env.into() },
+            process: ProcessConfig { enabled: true, command: cmd.into(), env: env.into(), ..Default::default() },
             ..Default::default()
         });
         c
+    }
+
+    impl Processes {
+        fn sync_t(self: &Arc<Self>, cfg: &Config) {
+            self.sync(cfg, &crate::secrets::MemorySecrets::default())
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn network_setting_controls_proxy_vars() {
+        let mut c = cfg("echo proxy=[$HTTPS_PROXY]; sleep 30");
+        // 额外变量里模拟终端设置了代理；直连要把它去掉（额外变量优先级最高，所以这里用 App 自身继承的变量来模拟不了，直接测 apply_network）
+        let mut envs: HashMap<String, String> = [("HTTPS_PROXY".to_string(), "http://corp:8080".to_string()), ("PATH".to_string(), "/bin".to_string())].into();
+        apply_network(&mut envs, &Network::Direct);
+        assert!(!envs.contains_key("HTTPS_PROXY"));
+        assert_eq!(envs["NO_PROXY"], "*");
+        assert_eq!(envs["PATH"], "/bin");
+
+        // 指定出口代理：程序拿到的 HTTPS_PROXY 就是这个代理
+        c.proxies.push(ProxyConfig { id: "corp".into(), name: "公司代理".into(), kind: ProxyKind::Http, url: "proxy.corp:8080".into(), username: String::new() });
+        c.endpoints[0].process.network = "corp".into();
+        let p = Processes::new();
+        p.sync_t(&c);
+        wait_state(&p, "running").await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let logs = p.status("local").unwrap().logs;
+        assert!(logs.iter().any(|l| l == "proxy=[http://proxy.corp:8080]"), "{logs:?}");
+        assert!(logs.iter().any(|l| l.contains("经出口代理「公司代理」")), "{logs:?}");
+
+        // 改成直连：程序会重启，代理变量被去掉
+        c.endpoints[0].process.network = "direct".into();
+        p.sync_t(&c);
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        let logs = p.status("local").unwrap().logs;
+        assert_eq!(logs.iter().filter(|l| l.starts_with("proxy=")).last().map(String::as_str), Some("proxy=[]"), "{logs:?}");
+        p.stop_all();
     }
 
     async fn wait_state(p: &Processes, state: &str) -> ProcessStatus {
@@ -625,7 +741,7 @@ mod tests {
     async fn runs_logs_restarts_and_stops() {
         let p = Processes::new();
         // 输出一行后退出 → 应该被自动重启
-        p.sync(&cfg("echo hello-from-child; exit 3"));
+        p.sync_t(&cfg("echo hello-from-child; exit 3"));
         tokio::time::sleep(Duration::from_millis(1800)).await;
         let st = p.status("local").unwrap();
         assert!(st.logs.iter().any(|l| l == "hello-from-child"), "{:?}", st.logs);
@@ -633,12 +749,12 @@ mod tests {
         assert!(st.last_exit.contains('3'), "{st:?}");
 
         // 换成长期运行的命令：命令变了会重启成新的
-        p.sync(&cfg("echo started; sleep 30"));
+        p.sync_t(&cfg("echo started; sleep 30"));
         let st = wait_state(&p, "running").await;
         let pid = st.pid.unwrap();
 
         // 配置里去掉 → 停止并结束进程
-        p.sync(&Config::default());
+        p.sync_t(&Config::default());
         tokio::time::sleep(Duration::from_millis(500)).await;
         assert!(p.status("local").is_none());
         assert!(!alive(pid), "进程应该已经结束");
@@ -648,7 +764,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn restart_from_plain_thread() {
         let p = Processes::new();
-        p.sync(&cfg("echo started; sleep 30"));
+        p.sync_t(&cfg("echo started; sleep 30"));
         wait_state(&p, "running").await;
         let p2 = p.clone();
         std::thread::spawn(move || p2.restart("local").unwrap()).join().expect("在普通线程上重启不应该 panic");
@@ -661,14 +777,14 @@ mod tests {
     async fn manual_stop_survives_config_save_until_started() {
         let p = Processes::new();
         let c = cfg("sleep 30");
-        p.sync(&c);
+        p.sync_t(&c);
         let pid = wait_state(&p, "running").await.pid.unwrap();
         p.stop("local");
         let st = wait_state(&p, "stopped").await;
         assert!(st.held);
         assert!(!alive(pid));
         // 保存配置不会把手动停止的程序拉起来
-        p.sync(&c);
+        p.sync_t(&c);
         tokio::time::sleep(Duration::from_millis(400)).await;
         assert_eq!(p.status("local").unwrap().state, "stopped");
         // 手动启动
@@ -681,7 +797,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn pause_and_resume_with_gateway() {
         let p = Processes::new();
-        p.sync(&cfg("sleep 30"));
+        p.sync_t(&cfg("sleep 30"));
         let pid = wait_state(&p, "running").await.pid.unwrap();
         p.pause();
         let st = wait_state(&p, "stopped").await;
@@ -696,12 +812,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn gives_up_after_quick_failures() {
         let p = Processes::with_backoff_unit(20);
-        p.sync(&cfg("exit 7"));
+        p.sync_t(&cfg("exit 7"));
         let st = wait_state(&p, "failed").await;
         assert!(st.held);
         assert!(st.last_exit.contains("已停止自动重启"), "{st:?}");
         // 命令改了：重新尝试
-        p.sync(&cfg("sleep 30"));
+        p.sync_t(&cfg("sleep 30"));
         wait_state(&p, "running").await;
         p.stop_all();
     }
@@ -709,7 +825,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn extra_env_is_passed() {
         let p = Processes::new();
-        p.sync(&cfg_env("echo value=$KIKI_TEST_VAR; sleep 30", "export KIKI_TEST_VAR=\"hello world\"\n# 注释\n"));
+        p.sync_t(&cfg_env("echo value=$KIKI_TEST_VAR; sleep 30", "export KIKI_TEST_VAR=\"hello world\"\n# 注释\n"));
         wait_state(&p, "running").await;
         tokio::time::sleep(Duration::from_millis(300)).await;
         let st = p.status("local").unwrap();

@@ -12,7 +12,7 @@ use crate::protocol::{self, EncodeCtx, Normalizer};
 use crate::router::{self, Target, CLAUDE_ALIAS};
 use crate::sse::{SseEvent, SseParser};
 use crate::store::{Attempt, LogBodies, LogRecord, Store};
-use crate::upstream::{base_headers, mask_headers, upstream_url, Clients};
+use crate::upstream::{base_headers, effective_proxy, mask_headers, upstream_url, Clients};
 use anyhow::{anyhow, Result};
 use axum::body::{Body, Bytes};
 use axum::extract::{Path as AxPath, RawQuery, State};
@@ -201,7 +201,7 @@ impl Gateway {
         self.0.config_file.save(&cfg)?;
         *self.0.config.write() = Arc::new(cfg.clone());
         self.0.clients.clear();
-        self.0.processes.sync(&cfg);
+        self.0.processes.sync(&cfg, &*self.0.secrets);
         if old_port != cfg.server.port && self.status().running {
             // 只重启网关服务本身，不连带重启本地程序
             self.stop_server().await;
@@ -282,7 +282,7 @@ impl Gateway {
         if self.0.janitor_started.swap(true, std::sync::atomic::Ordering::SeqCst) {
             return;
         }
-        self.0.processes.sync(&self.config());
+        self.0.processes.sync(&self.config(), &*self.0.secrets);
         let g = self.clone();
         tokio::spawn(async move {
             loop {
@@ -373,7 +373,7 @@ impl Gateway {
         count_tokens: bool,
     ) -> Result<Prepared> {
         let ep = &target.endpoint;
-        let http = self.0.clients.get(cfg, &target.proxy, &*self.0.secrets)?;
+        let http = self.0.clients.get(cfg, effective_proxy(&ep.base_url, &target.proxy), &*self.0.secrets)?;
         let api_key = self.0.secrets.get(&keys::endpoint_api_key(&ep.id)).ok().flatten().unwrap_or_default();
         let mut headers = base_headers(ep, &api_key, stream)?;
         // Claude Code → Anthropic 上游：带上 beta 开关（1M 上下文、交错思考等）
@@ -1012,7 +1012,7 @@ impl Gateway {
         let Some(ep) = cfg.endpoint(endpoint_id).cloned() else {
             return TestStep::new("network", "网络", "fail", "端点不存在，请先保存", 0);
         };
-        let proxy_name = match ep.proxy.as_str() {
+        let proxy_name = match effective_proxy(&ep.base_url, &ep.proxy) {
             crate::config::PROXY_DIRECT => "直连".to_string(),
             crate::config::PROXY_SYSTEM | "" => "系统代理".to_string(),
             id => cfg.proxy(id).map(|p| p.name.clone()).unwrap_or_else(|| id.to_string()),
@@ -1022,7 +1022,7 @@ impl Gateway {
             return TestStep::new("network", "网络", "fail", h, 0);
         }
         let t0 = Instant::now();
-        let net = match self.0.clients.get(&cfg, &ep.proxy, &*self.0.secrets) {
+        let net = match self.0.clients.get(&cfg, effective_proxy(&ep.base_url, &ep.proxy), &*self.0.secrets) {
             Err(e) => Err(e.to_string()),
             Ok(http) => match tokio::time::timeout(Duration::from_secs(15), http.get(&ep.base_url).send()).await {
                 Err(_) => Err("15 秒内没有响应".to_string()),

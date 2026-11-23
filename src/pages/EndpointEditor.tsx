@@ -31,7 +31,7 @@ const PRESETS: { label: string; ep: Partial<EndpointConfig>; models: string[] }[
       baseUrl: "http://127.0.0.1:8787",
       auth: "none",
       proxy: "direct",
-      process: { enabled: true, command: "", workdir: "", env: "" },
+      process: { enabled: true, command: "", workdir: "", env: "", network: "" },
     },
     models: [],
   },
@@ -264,7 +264,14 @@ export default function EndpointEditor({ id }: { id: string | null }) {
                 ))}
               </select>
             </Field>
-            <Field label="出口" help="访问这个端点走哪条线路，可在「出口代理」里添加">
+            <Field
+              label="出口"
+              help={
+                /^https?:\/\/(127\.|localhost|\[::1\])/i.test(ep.baseUrl)
+                  ? "这是本机地址，网关会直接连接，不经过任何代理。本地程序自己访问外网走哪条线，在下面的「本地程序」里设置"
+                  : "网关访问这个端点走哪条线路，可在「出口代理」里添加"
+              }
+            >
               <select className="select" value={ep.proxy} onChange={(e) => set("proxy", e.target.value)}>
                 <option value="system">跟随系统代理</option>
                 <option value="direct">直连（不走任何代理）</option>
@@ -317,6 +324,26 @@ export default function EndpointEditor({ id }: { id: string | null }) {
                     placeholder="~"
                     onChange={(e) => set("process", { ...ep.process, workdir: e.target.value })}
                   />
+                </Field>
+                <Field
+                  label="本地程序的网络"
+                  help={
+                    ep.process.network === "direct"
+                      ? "启动时去掉 HTTP_PROXY / HTTPS_PROXY / ALL_PROXY 等代理变量，程序直接访问内部服务"
+                      : ep.process.network
+                        ? "启动时把 HTTP_PROXY / HTTPS_PROXY / ALL_PROXY 设成这个代理"
+                        : "和在终端里运行一样：终端里设置了代理变量（比如 ~/.zshrc 里的 HTTPS_PROXY）就会走代理。启动日志里会写明实际走哪条线"
+                  }
+                >
+                  <select className="select" value={ep.process.network} onChange={(e) => set("process", { ...ep.process, network: e.target.value })}>
+                    <option value="">跟随终端（和在终端里运行一样）</option>
+                    <option value="direct">直连（去掉代理变量）</option>
+                    {config.proxies.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        经出口代理：{p.name}
+                      </option>
+                    ))}
+                  </select>
                 </Field>
                 <Field
                   label="环境变量"
