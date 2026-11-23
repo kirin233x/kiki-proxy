@@ -13,7 +13,7 @@
 - **本地程序**：公司内部服务如果已经有命令行代理（负责登录、续期、格式转换，比如 cc-proxy），在端点里填上它的启动命令即可。kiki-proxy 会在启动时把它拉起来、挂了自动重启、退出时一起结束，并在界面上显示它的运行状态和输出日志；网关把这个端点的请求转给它监听的地址。
 - **请求日志**：每个请求的客户端原始请求、发给上游的请求、上游原始响应、返回客户端的响应都能看到（密钥自动打码），可以一键复制成 curl 重放。完整内容默认保留 24 小时。
 - **用量统计**：按模型、按端点统计请求数、token、费用、耗时、失败率。
-- **一键获取模型和价格**：从上游的 `/models` 接口拉取模型列表，勾选添加；价格、上下文窗口、是否支持图片从 [LiteLLM 公开价格表](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) 自动填写（内部模型查不到的手动填）。
+- **一键获取模型**：从上游的 `/models` 接口拉取模型列表，勾选添加；是否支持 1M 上下文、是否支持图片可从 [LiteLLM 公开模型表](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) 自动识别（内部模型查不到的手动设置）。
 - **上下文窗口**：每个模型可以标注上下文大小。≥ 1M 的模型在 Claude Code 的 `/model` 里带 `[1m]` 后缀；其他模型通过 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 告诉 Claude Code 何时压缩上下文（Claude Code 对不认识的模型名默认按 1M 处理）。上游返回「上下文超长」时，网关会改写成 Claude Code 认识的错误，让它自动压缩后重试。
 - **一键接入客户端**：自动修改 Claude Code / Codex / Gemini CLI 的配置文件（修改前自动备份，可一键恢复）；Claude Code 桌面版可以一键写入（或生成配置文件导入）。
 
@@ -26,7 +26,7 @@
 3. **默认模型**：以上都不匹配时使用。
 4. **故障切换**：上面选出的目标失败时，按端点（或模型）配置的备选列表依次尝试。
 
-「路由与切换」页面里有一个路由测试工具，输入模型名就能看到它会被发到哪里。
+「路由」页面里有一个路由测试工具，输入模型名就能看到它会被发到哪里。
 
 ## 在 Mac 上编译
 
@@ -91,7 +91,7 @@ npm run test:core
 
 ## Claude Code 桌面版
 
-桌面版不读 `~/.claude/settings.json`，需要用它自己的「第三方推理」配置。先在桌面版里打开 Help → Troubleshooting → Enable Developer Mode（只需一次），再在「客户端接入」页选好模型，点「一键写入桌面版」，完全退出桌面版再打开即可。
+桌面版不读 `~/.claude/settings.json`，需要用它自己的「第三方推理」配置。先在桌面版里打开 Help → Troubleshooting → Enable Developer Mode（只需一次），再在「客户端」页选好模型，点「一键接入」，完全退出桌面版再打开即可。
 
 桌面版只接受 `claude-sonnet-*`、`claude-opus-*`、`claude-haiku-*`、`claude-fable-*` 这类模型名，有一个不合格就整个列表报「Invalid: Model list」。所以 kiki-proxy 给每个模型分配一个档位名（如 `claude-sonnet-5`，同档多个时是 `claude-sonnet-5-r2`），菜单里显示真实模型名；桌面版的请求走 `http://127.0.0.1:41521/claude-desktop`，网关按这张表换回真实模型。做法参考了 cc-switch。
 
@@ -105,7 +105,7 @@ src-tauri/core/          网关引擎（纯 Rust，不依赖 Tauri，可以单�
   src/gateway.rs         本地 HTTP 服务与请求处理主流程
   src/upstream.rs        出口代理、上游地址拼接
   src/process.rs         本地程序托管（启动、日志、自动重启）
-  src/pricing.rs         模型价格表（LiteLLM）
+  src/pricing.rs         LiteLLM 模型表（识别 1M、图像支持）
   src/store.rs           请求日志与用量统计（SQLite）
   src/clients.rs         一键配置 Claude Code / Codex / Gemini CLI，生成桌面版配置文件
   tests/                 端到端测试、真实报文测试
@@ -124,6 +124,6 @@ design/                  图标与视觉风格说明
 
 ## 已知限制
 
-- Claude Code 桌面版不读 `settings.json`，需要在它的 Developer → Configure Third-Party Inference 里手动填网关地址（客户端接入页有步骤）。
+- Claude Code 桌面版不读 `settings.json`，需要在它的 Developer → Configure Third-Party Inference 里手动填网关地址（「客户端」页有步骤）。
 - 跨协议转换时，各家独有的功能（Anthropic 的服务端工具和 prompt 缓存标记、OpenAI 的内置工具、加密的推理内容等）没有对应物，会被丢弃；同协议之间是原样透传，不受影响。
 - Claude Code 的 `/model` 只显示名字含 claude 的模型，所以其他模型在列表里会显示成 `claude@前缀/模型`，网关会自动去掉这个前缀。

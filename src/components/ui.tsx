@@ -180,10 +180,10 @@ export function Field(props: { label: string; help?: ReactNode; children: ReactN
         <span>
           {props.label}
           {props.required && <i className="req"> *</i>}
+          {props.help && <Hint>{props.help}</Hint>}
         </span>
       </label>
       {props.children}
-      {props.help && <div className="field-help">{props.help}</div>}
     </div>
   );
 }

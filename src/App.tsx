@@ -1,12 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { BarChart3, GitBranch, Globe, LayoutDashboard, Pause, Play, Plus, ScrollText, Server, Settings as SettingsIcon, TerminalSquare } from "lucide-react";
+import { BarChart3, GitBranch, LayoutDashboard, Pause, Play, Plus, ScrollText, Server, Settings as SettingsIcon, TerminalSquare } from "lucide-react";
 import { api, Config, listen, ListedModel, ServerStatus } from "./api";
-import { CopyButton, Modal, StatusDot, ToastProvider, useToast } from "./components/ui";
+import { Modal, StatusDot, ToastProvider, useToast } from "./components/ui";
+import LogoMark from "./components/Logo";
 import Overview from "./pages/Overview";
 import Endpoints from "./pages/Endpoints";
 import EndpointEditor from "./pages/EndpointEditor";
 import Routing from "./pages/Routing";
-import Proxies from "./pages/Proxies";
 import Logs from "./pages/Logs";
 import StatsPage from "./pages/Stats";
 import Clients from "./pages/Clients";
@@ -17,7 +17,6 @@ export type Route =
   | { name: "endpoints" }
   | { name: "endpoint"; id: string | null }
   | { name: "routing" }
-  | { name: "proxies" }
   | { name: "logs"; endpoint?: string }
   | { name: "stats" }
   | { name: "clients" }
@@ -131,12 +130,11 @@ function Shell() {
   const nav = [
     { key: "overview", label: "概览", icon: <LayoutDashboard size={18} />, route: { name: "overview" } as Route },
     { key: "endpoints", label: "端点", icon: <Server size={18} />, route: { name: "endpoints" } as Route },
-    { key: "routing", label: "路由与切换", icon: <GitBranch size={18} />, route: { name: "routing" } as Route },
-    { key: "proxies", label: "出口代理", icon: <Globe size={18} />, route: { name: "proxies" } as Route },
+    { key: "clients", label: "客户端", icon: <TerminalSquare size={18} />, route: { name: "clients" } as Route },
     { key: "logs", label: "请求日志", icon: <ScrollText size={18} />, route: { name: "logs" } as Route },
     { key: "stats", label: "用量统计", icon: <BarChart3 size={18} />, route: { name: "stats" } as Route },
-    { key: "clients", label: "客户端接入", icon: <TerminalSquare size={18} />, route: { name: "clients" } as Route },
     { key: "settings", label: "设置", icon: <SettingsIcon size={18} />, route: { name: "settings" } as Route },
+    { key: "routing", label: "路由", icon: <GitBranch size={18} />, route: { name: "routing" } as Route },
   ];
   const activeKey = route.name === "endpoint" ? "endpoints" : route.name;
 
@@ -156,13 +154,7 @@ function Shell() {
           <div className="drag-region" data-tauri-drag-region />
           <div className="brand" data-tauri-drag-region>
             <div className="brand-logo">
-              <svg width="20" height="20" viewBox="0 0 44 44" fill="none" stroke="white" strokeWidth="3.6" strokeLinecap="round">
-                <path d="M8 22 H17 M17 22 C22 22 22 12 28 12 H31 M17 22 H31 M17 22 C22 22 22 32 28 32 H31" />
-                <circle cx="8" cy="22" r="4" fill="white" stroke="none" />
-                <circle cx="34" cy="12" r="3.4" fill="white" stroke="none" />
-                <circle cx="34" cy="22" r="3.4" fill="#ffd1e8" stroke="none" />
-                <circle cx="34" cy="32" r="3.4" fill="white" stroke="none" />
-              </svg>
+              <LogoMark size={22} />
             </div>
             <div>
               <div className="brand-name">kiki-proxy</div>
@@ -208,12 +200,6 @@ function Shell() {
                   {status.running ? <Pause size={16} /> : <Play size={16} />}
                 </button>
               </div>
-              {status.running && (
-                <div className="gw-url">
-                  <code>{ctx.baseUrl}</code>
-                  <CopyButton text={ctx.baseUrl} small />
-                </div>
-              )}
             </div>
           </div>
         </aside>
@@ -223,7 +209,6 @@ function Shell() {
           {route.name === "endpoints" && <Endpoints />}
           {route.name === "endpoint" && <EndpointEditor key={route.id ?? "new"} id={route.id} />}
           {route.name === "routing" && <Routing />}
-          {route.name === "proxies" && <Proxies />}
           {route.name === "logs" && <Logs initialEndpoint={route.endpoint} />}
           {route.name === "stats" && <StatsPage />}
           {route.name === "clients" && <Clients />}

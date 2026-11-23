@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import { Plus, Save, Trash2, Wand2 } from "lucide-react";
-import { api, Config, Protocol, PROTOCOLS, RouteHop, RuleConfig, uid } from "../api";
+import { api, Config, PROTOCOLS, RouteHop, RuleConfig, uid } from "../api";
 import { useApp } from "../App";
 import { SortHandle, useSortable } from "../components/SortableList";
-import ModelInput, { ModelChain } from "../components/ModelInput";
-import { Switch, useToast } from "../components/ui";
+import ModelInput from "../components/ModelInput";
+import { Hint, Switch, useToast } from "../components/ui";
 
 export default function Routing() {
-  const { config, saveConfig, go } = useApp();
+  const { config, saveConfig } = useApp();
   const toast = useToast();
   const [draft, setDraft] = useState<Config>(() => structuredClone(config));
   const dirty = JSON.stringify(draft) !== JSON.stringify(config);
@@ -25,11 +25,6 @@ export default function Routing() {
     if (!ep) return [];
     return m?.fallbacks.length ? m.fallbacks : ep.fallbacks;
   };
-  const setChain = (epId: string, name: string, list: string[]) =>
-    setDraft((d) => ({
-      ...d,
-      endpoints: d.endpoints.map((e) => (e.id !== epId ? e : { ...e, models: e.models.map((m) => (m.name === name ? { ...m, fallbacks: list } : m)) })),
-    }));
   const setRule = (i: number, patch: Partial<RuleConfig>) => setDraft((d) => ({ ...d, rules: d.rules.map((r, j) => (j === i ? { ...r, ...patch } : r)) }));
   const sortRules = useSortable((from, to) =>
     setDraft((d) => {
@@ -78,8 +73,7 @@ export default function Routing() {
       <div className="page-inner" style={{ maxWidth: 1100 }}>
         <div className="page-header">
           <div>
-            <h1 className="page-title">路由与切换</h1>
-            <div className="page-subtitle">按模型名查看请求的转发目标与故障切换顺序</div>
+            <h1 className="page-title">路由</h1>
           </div>
           <div className="header-actions">
             <button className="btn btn-primary" onClick={() => saveConfig(draft).then(() => toast("已保存"))} disabled={!dirty}>
@@ -93,15 +87,20 @@ export default function Routing() {
 
         <div className="panel route-table">
           <div className="rt-row rt-head">
-            <span>请求模型</span>
+            <span>模型名</span>
             <span>转发至</span>
-            <span>故障切换</span>
+            <span>
+              故障切换
+              <Hint>在端点编辑页设置备选模型，触发条件在「设置」中配置</Hint>
+            </span>
           </div>
 
           {/* ---------------------------------------------------------------- 规则 */}
           <div className="rt-group">
-            <b>规则</b>
-            <span>优先匹配，自上而下，拖动调整顺序。适用于客户端固定使用的模型名（如 Claude Code 后台任务的 haiku），支持通配符 * 和 ?</span>
+            <b>
+              规则
+              <Hint>自上而下优先匹配，拖动调整顺序。适用于客户端固定使用的模型名（如 Claude Code 后台任务的 haiku），支持通配符 * 和 ?</Hint>
+            </b>
           </div>
           <div ref={sortRules.listRef} className={`rt-rules ${sortRules.sorting ? "is-sorting" : ""}`}>
             {draft.rules.map((r, i) => {
@@ -115,15 +114,12 @@ export default function Routing() {
                       <input className="input mono" value={r.pattern} placeholder="claude-*haiku*" onChange={(e) => setRule(i, { pattern: e.target.value.trim() })} />
                     </div>
                     <div className="rule-line sub">
-                      <select className="select" value={r.client ?? ""} onChange={(e) => setRule(i, { client: (e.target.value || null) as Protocol | null })}>
-                        <option value="">所有客户端</option>
-                        {PROTOCOLS.map((p) => (
-                          <option key={p.value} value={p.value}>
-                            仅 {p.label}
-                          </option>
-                        ))}
-                      </select>
                       <input className="input" value={r.name} placeholder="备注" onChange={(e) => setRule(i, { name: e.target.value })} />
+                      {r.client && (
+                        <button className="chip-x" title="该规则只对此协议的客户端生效，点击取消限制" onClick={() => setRule(i, { client: null })}>
+                          仅 {PROTOCOLS.find((p) => p.value === r.client)?.label ?? r.client} ×
+                        </button>
+                      )}
                     </div>
                   </div>
                   <div className="rt-cell">
@@ -166,45 +162,12 @@ export default function Routing() {
             </button>
           </div>
 
-          {/* ---------------------------------------------------------------- 端点模型 */}
-          <div className="rt-group">
-            <b>端点模型</b>
-            <span>
-              「前缀/模型名」直接发到对应端点。备选在这里或端点编辑页设置，切换条件在
-              <a onClick={() => go({ name: "settings" })}>设置</a>里
-            </span>
-          </div>
-          {draft.endpoints
-            .filter((e) => e.enabled)
-            .flatMap((e) =>
-              e.models
-                .filter((m) => m.enabled)
-                .map((m) => {
-                  const id = `${e.id}/${m.name}`;
-                  const inherited = !m.fallbacks.length && e.fallbacks.length > 0;
-                  return (
-                    <div key={id} className="rt-row">
-                      <div className="rt-cell">
-                        <code className="rt-model">{id}</code>
-                        {m.displayName && <span className="muted-sm">{m.displayName}</span>}
-                      </div>
-                      <div className="rt-cell">
-                        {dest(id)}
-                        {m.upstream && m.upstream !== m.name && <span className="muted-sm">上游模型 {m.upstream}</span>}
-                      </div>
-                      <div className="rt-cell rt-chain">
-                        <ModelChain value={chainOf(id)} onChange={(v) => setChain(e.id, m.name, v)} exclude={[id]} />
-                        {inherited && <span className="inherit">沿用端点「{e.name}」的设置；修改后仅对该模型生效</span>}
-                      </div>
-                    </div>
-                  );
-                }),
-            )}
-
           {/* ---------------------------------------------------------------- 兜底 */}
           <div className="rt-group">
-            <b>兜底</b>
-            <span>不带前缀且未匹配任何规则的模型名（如 Claude Code 默认的 claude-sonnet-4-5）</span>
+            <b>
+              兜底
+              <Hint>不带前缀且未匹配任何规则的模型名（如 Claude Code 默认的 claude-sonnet-4-5）</Hint>
+            </b>
           </div>
           <div className="rt-row">
             <div className="rt-cell">
@@ -214,7 +177,7 @@ export default function Routing() {
               <ModelInput
                 value={draft.routing.defaultModel}
                 onChange={(v) => setDraft({ ...draft, routing: { ...draft.routing, defaultModel: v } })}
-                placeholder="不设置则返回「找不到模型」"
+                placeholder="未设置"
               />
               {draft.routing.defaultModel && <div className="rule-line sub">{dest(draft.routing.defaultModel)}</div>}
             </div>
@@ -228,7 +191,6 @@ export default function Routing() {
 
 function RouteTester() {
   const [model, setModel] = useState("");
-  const [client, setClient] = useState<Protocol>("anthropic");
   const [hops, setHops] = useState<RouteHop[] | null>(null);
   const [error, setError] = useState("");
   const { config } = useApp();
@@ -238,7 +200,7 @@ function RouteTester() {
     if (!model) return;
     setError("");
     try {
-      setHops(await api.explainRoute(model, client));
+      setHops(await api.explainRoute(model, "anthropic"));
     } catch (e) {
       setHops(null);
       setError(String(e));
@@ -248,20 +210,11 @@ function RouteTester() {
   return (
     <div className="tester2">
       <Wand2 size={16} />
-      <span>路由测试：</span>
-      <select className="select" value={client} onChange={(e) => setClient(e.target.value as Protocol)}>
-        {PROTOCOLS.map((p) => (
-          <option key={p.value} value={p.value}>
-            {p.label} 客户端
-          </option>
-        ))}
-      </select>
-      <span>发来</span>
       <div style={{ flex: 1 }}>
-        <ModelInput value={model} onChange={setModel} placeholder="输入模型名，如 claude-haiku-4-5" />
+        <ModelInput value={model} onChange={setModel} placeholder="输入模型名测试路由，如 claude-haiku-4-5" />
       </div>
       <button className="btn btn-sm btn-primary" onClick={run} disabled={!model}>
-        解析
+        测试
       </button>
       {(hops || error) && (
         <div className="tester2-result">

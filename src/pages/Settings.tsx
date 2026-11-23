@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { Download, FolderOpen, Monitor, Moon, RefreshCw, Sun, Upload } from "lucide-react";
-import { api, Config, PricingStatus } from "../api";
-import { fmtAgo } from "../utils";
+import { Download, FolderOpen, Monitor, Moon, Sun, Upload } from "lucide-react";
+import { api, Config } from "../api";
 import { useApp } from "../App";
-import { Confirm, Modal, SecretInput, Switch, useToast } from "../components/ui";
+import { ProxiesSection } from "./Proxies";
+import LogoMark from "../components/Logo";
+import { Confirm, Modal, SecretInput, Switch, useToast, Hint } from "../components/ui";
 
 export default function SettingsPage() {
   const { config, saveConfig } = useApp();
@@ -18,7 +19,10 @@ export default function SettingsPage() {
 
   useEffect(() => {
     api.getAutostart().then(setAutostart);
-    api.appInfo().then(setInfo).catch(() => {});
+    api
+      .appInfo()
+      .then(setInfo)
+      .catch(() => {});
   }, []);
 
   const save = (patch: (c: Config) => Config) => saveConfig(patch(structuredClone(config))).catch(() => {});
@@ -47,8 +51,10 @@ export default function SettingsPage() {
           <div className="panel">
             <div className="setting-row">
               <div className="setting-text">
-                <b>主题</b>
-                <span>跟随系统，或固定使用浅色 / 深色</span>
+                <b>
+                  主题
+                  <Hint>跟随系统，或固定使用浅色 / 深色</Hint>
+                </b>
               </div>
               <div className="segmented">
                 {(
@@ -73,8 +79,10 @@ export default function SettingsPage() {
           <div className="panel">
             <div className="setting-row">
               <div className="setting-text">
-                <b>端口</b>
-                <span>只监听 127.0.0.1，局域网里的其他设备访问不到</span>
+                <b>
+                  端口
+                  <Hint>只监听 127.0.0.1，局域网里的其他设备访问不到</Hint>
+                </b>
               </div>
               <input
                 className="input mono"
@@ -87,8 +95,10 @@ export default function SettingsPage() {
             </div>
             <div className="setting-row">
               <div className="setting-text">
-                <b>访问密钥</b>
-                <span>设置后，客户端必须带上这个密钥（任意请求头里的 API Key）才能使用网关</span>
+                <b>
+                  访问密钥
+                  <Hint>设置后，客户端必须带上这个密钥（任意请求头里的 API Key）才能使用网关</Hint>
+                </b>
               </div>
               <div style={{ width: 260 }}>
                 <SecretInput
@@ -111,8 +121,10 @@ export default function SettingsPage() {
             </div>
             <div className="setting-row">
               <div className="setting-text">
-                <b>开机自动启动</b>
-                <span>登录后在菜单栏静默运行；关闭窗口不会停止网关</span>
+                <b>
+                  开机自动启动
+                  <Hint>登录后在菜单栏静默运行；关闭窗口不会停止网关</Hint>
+                </b>
               </div>
               <Switch
                 on={autostart}
@@ -127,10 +139,12 @@ export default function SettingsPage() {
           </div>
         </div>
 
+        <ProxiesSection />
+
         <div className="settings-group">
           <h3>
             故障切换
-            <span className="h3-hint">出现下面这些情况时，换到端点 / 模型设置的备选；已经开始输出的回答不会被打断重来</span>
+            <Hint>出现下面这些情况时，换到端点 / 模型设置的备选；已经开始输出的回答不会被打断重来</Hint>
           </h3>
           <div className="panel">
             {(
@@ -143,16 +157,20 @@ export default function SettingsPage() {
             ).map(([k, title, desc]) => (
               <div key={k} className="setting-row">
                 <div className="setting-text">
-                  <b>{title}</b>
-                  <span>{desc}</span>
+                  <b>
+                    {title}
+                    <Hint>{desc}</Hint>
+                  </b>
                 </div>
                 <Switch on={config.failover[k]} onChange={(v) => save((c) => ({ ...c, failover: { ...c.failover, [k]: v } }))} />
               </div>
             ))}
             <div className="setting-row">
               <div className="setting-text">
-                <b>其他状态码</b>
-                <span>额外触发切换的状态码，逗号分隔，例如 401, 403</span>
+                <b>
+                  其他状态码
+                  <Hint>额外触发切换的状态码，逗号分隔，例如 401, 403</Hint>
+                </b>
               </div>
               <input
                 className="input mono"
@@ -176,8 +194,10 @@ export default function SettingsPage() {
           <div className="panel">
             <div className="setting-row">
               <div className="setting-text">
-                <b>完整内容保留</b>
-                <span>请求体、响应体、请求头（含图片），用于排查问题</span>
+                <b>
+                  完整内容保留
+                  <Hint>请求体、响应体、请求头（含图片），用于排查问题</Hint>
+                </b>
               </div>
               <select
                 className="select"
@@ -194,8 +214,10 @@ export default function SettingsPage() {
             </div>
             <div className="setting-row">
               <div className="setting-text">
-                <b>用量摘要保留</b>
-                <span>模型、token、耗时、费用，用于统计</span>
+                <b>
+                  用量摘要保留
+                  <Hint>模型、token、耗时，用于统计</Hint>
+                </b>
               </div>
               <select
                 className="select"
@@ -212,8 +234,10 @@ export default function SettingsPage() {
             </div>
             <div className="setting-row">
               <div className="setting-text">
-                <b>单条记录上限</b>
-                <span>超过的部分会被截断，避免大图片把日志撑得太大</span>
+                <b>
+                  单条记录上限
+                  <Hint>超过的部分会被截断，避免大图片把日志撑得太大</Hint>
+                </b>
               </div>
               <select
                 className="select"
@@ -230,8 +254,10 @@ export default function SettingsPage() {
             </div>
             <div className="setting-row">
               <div className="setting-text">
-                <b>清空日志</b>
-                <span>删除所有请求记录和统计</span>
+                <b>
+                  清空日志
+                  <Hint>删除所有请求记录和统计</Hint>
+                </b>
               </div>
               <button className="btn btn-danger btn-sm" onClick={() => setClear(true)}>
                 清空
@@ -245,8 +271,10 @@ export default function SettingsPage() {
           <div className="panel">
             <div className="setting-row">
               <div className="setting-text">
-                <b>导出 / 导入</b>
-                <span>TOML 格式，不包含 API Key 等密钥（密钥在钥匙串里）</span>
+                <b>
+                  导出 / 导入
+                  <Hint>TOML 格式，不包含 API Key 等密钥（密钥在钥匙串里）</Hint>
+                </b>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
                 <button className="btn btn-sm" onClick={() => api.exportConfig().then(setExported)}>
@@ -265,8 +293,10 @@ export default function SettingsPage() {
             </div>
             <div className="setting-row">
               <div className="setting-text">
-                <b>测速地址</b>
-                <span>测试出口代理时访问的地址</span>
+                <b>
+                  测速地址
+                  <Hint>测试出口代理时访问的地址</Hint>
+                </b>
               </div>
               <input
                 className="input mono"
@@ -278,10 +308,10 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        <PricingSection />
-
         <div className="about">
-          <div className="brand-logo">k</div>
+          <div className="brand-logo">
+            <LogoMark size={22} />
+          </div>
           <div>
             <b>kiki-proxy {info ? info.version : ""}</b>
             {info && (
@@ -295,7 +325,16 @@ export default function SettingsPage() {
       </div>
 
       {exported !== null && (
-        <Modal title="导出配置" onClose={() => setExported(null)} wide footer={<button className="btn btn-primary" onClick={() => navigator.clipboard?.writeText(exported).then(() => toast("已复制"))}>复制</button>}>
+        <Modal
+          title="导出配置"
+          onClose={() => setExported(null)}
+          wide
+          footer={
+            <button className="btn btn-primary" onClick={() => navigator.clipboard?.writeText(exported).then(() => toast("已复制"))}>
+              复制
+            </button>
+          }
+        >
           <pre className="code" style={{ maxHeight: 420 }}>
             {exported}
           </pre>
@@ -303,7 +342,14 @@ export default function SettingsPage() {
       )}
       {importing && <ImportDialog onClose={() => setImporting(false)} />}
       {clear && (
-        <Confirm title="清空所有日志？" message="请求记录和用量统计都会被删除，不能恢复。" danger confirmText="清空" onClose={() => setClear(false)} onConfirm={() => api.clearLogs().then(() => toast("已清空"))} />
+        <Confirm
+          title="清空所有日志？"
+          message="请求记录和用量统计都会被删除，不能恢复。"
+          danger
+          confirmText="清空"
+          onClose={() => setClear(false)}
+          onConfirm={() => api.clearLogs().then(() => toast("已清空"))}
+        />
       )}
     </div>
   );
@@ -343,79 +389,13 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
       <p className="muted-sm" style={{ marginTop: 0 }}>
         粘贴导出的 TOML。导入会替换当前所有端点、代理和规则；API Key 需要重新填写。
       </p>
-      <textarea className="textarea mono" rows={16} value={text} onChange={(e) => setText(e.target.value)} placeholder="[server]&#10;port = 41521" />
+      <textarea
+        className="textarea mono"
+        rows={16}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="[server]&#10;port = 41521"
+      />
     </Modal>
-  );
-}
-
-function PricingSection() {
-  const { config, saveConfig } = useApp();
-  const toast = useToast();
-  const [st, setSt] = useState<PricingStatus | null>(null);
-  const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    api.pricingStatus().then(setSt);
-  }, []);
-  const refresh = async () => {
-    setBusy(true);
-    try {
-      const r = await api.refreshPricing();
-      setSt(r);
-      toast(`价格表已更新，共 ${r.count} 个模型`);
-    } catch (e) {
-      toast(String(e), true);
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <div className="settings-group">
-      <h3>模型价格表</h3>
-      <div className="panel">
-        <div className="setting-row">
-          <div className="setting-text">
-            <b>LiteLLM 公开价格表</b>
-            <span>
-              {st?.count ? `${st.count} 个模型 · ${fmtAgo(st.updatedAt)}更新` : "还没有下载"}。端点编辑页的「自动填写价格和上下文」「从上游获取模型」会用到它
-            </span>
-          </div>
-          <button className="btn btn-sm" onClick={refresh} disabled={busy}>
-            <RefreshCw size={14} />
-            {busy ? "下载中…" : "立即更新"}
-          </button>
-        </div>
-        <div className="setting-row">
-          <div className="setting-text">
-            <b>下载地址</b>
-            <span>访问不了 GitHub 时，可以换成镜像地址（LiteLLM 的 JSON 格式）</span>
-          </div>
-          <input
-            className="input mono"
-            style={{ width: 320 }}
-            defaultValue={config.pricing.url}
-            onBlur={(e) => e.target.value.trim() !== config.pricing.url && saveConfig({ ...config, pricing: { ...config.pricing, url: e.target.value.trim() } }).catch(() => {})}
-          />
-        </div>
-        <div className="setting-row">
-          <div className="setting-text">
-            <b>下载走哪个出口</b>
-          </div>
-          <select
-            className="select"
-            style={{ width: 200 }}
-            value={config.pricing.proxy}
-            onChange={(e) => saveConfig({ ...config, pricing: { ...config.pricing, proxy: e.target.value } }).catch(() => {})}
-          >
-            <option value="system">跟随系统代理</option>
-            <option value="direct">直连</option>
-            {config.proxies.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-    </div>
   );
 }

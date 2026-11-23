@@ -132,7 +132,6 @@ export default function Clients() {
         <div className="page-header">
           <div>
             <h1 className="page-title">客户端接入</h1>
-            <div className="page-subtitle">所有客户端只连接本机网关</div>
           </div>
         </div>
 

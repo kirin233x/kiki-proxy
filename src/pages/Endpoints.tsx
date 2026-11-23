@@ -6,7 +6,7 @@ import TestDialog from "../components/TestDialog";
 import { ProcessBadge } from "../components/ProcessPanel";
 import { Confirm, Empty, Menu, Switch, useToast } from "../components/ui";
 import { SortHandle, useSortable } from "../components/SortableList";
-import { fmtCost, fmtNum, protocolColor } from "../utils";
+import { fmtMs, fmtNum, protocolColor } from "../utils";
 
 export default function Endpoints() {
   const { config, saveConfig, go } = useApp();
@@ -52,9 +52,6 @@ export default function Endpoints() {
         <div className="page-header">
           <div>
             <h1 className="page-title">端点</h1>
-            <div className="page-subtitle">
-              客户端通过「前缀/模型 ID」访问，如 {config.endpoints[0] ? `${config.endpoints[0].id}/${config.endpoints[0].models[0]?.name ?? "模型"}` : "internal/sonnet"}
-            </div>
           </div>
           <div className="header-actions">
             <button className="btn btn-primary" onClick={() => go({ name: "endpoint", id: null })}>
@@ -129,8 +126,8 @@ export default function Endpoints() {
                       <span>Token</span>
                     </div>
                     <div>
-                      <b>{u?.cost ? fmtCost(u.cost) : "—"}</b>
-                      <span>费用</span>
+                      <b>{u?.requests ? fmtMs(u.avgMs) : "—"}</b>
+                      <span>平均耗时</span>
                     </div>
                   </div>
 

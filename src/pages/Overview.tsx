@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { Activity, ArrowRight, Coins, Gauge, Plus, Radio, RefreshCw, Server, Zap } from "lucide-react";
+import { Activity, ArrowRight, Gauge, Plus, Radio, RefreshCw, Server, Zap } from "lucide-react";
 import { api, listen, LogRecord, protocolLabel, Stats, TestResult } from "../api";
 import { useApp } from "../App";
 import { CopyButton, Empty, StatusDot } from "../components/ui";
 import { ProcessBadge } from "../components/ProcessPanel";
-import { fmtCost, fmtMs, fmtNum, fmtTime, protocolColor, statusTone } from "../utils";
+import { fmtMs, fmtNum, fmtTime, protocolColor, statusTone } from "../utils";
 
 export default function Overview() {
   const { config, status, go, baseUrl } = useApp();
@@ -81,7 +81,6 @@ export default function Overview() {
         <div className="page-header">
           <div>
             <h1 className="page-title">概览</h1>
-            <div className="page-subtitle">客户端统一连接 {baseUrl}，按模型名路由至各端点</div>
           </div>
         </div>
 
@@ -112,19 +111,12 @@ export default function Overview() {
                 查看请求日志
               </button>
               <button className="btn hero-ghost" onClick={() => go({ name: "clients" })}>
-                接入客户端
+                客户端
                 <ArrowRight size={15} />
               </button>
             </div>
           </div>
           <div className="hero-stats">
-            <div className="hero-stat">
-              <div className="hero-stat-num">{fmtCost(t?.cost ?? 0)}</div>
-              <div className="hero-stat-label">
-                <Coins size={12} />
-                今日费用
-              </div>
-            </div>
             <div className="hero-stat">
               <div className="hero-stat-num">{t?.requests ? fmtMs(t.avgMs) : "—"}</div>
               <div className="hero-stat-label">
@@ -152,8 +144,7 @@ export default function Overview() {
         <div className="ep-grid">
           {config.endpoints.map((e) => {
             const h = health[e.id];
-            const proxyName =
-              e.proxy === "direct" ? "直连" : e.proxy === "system" ? "系统代理" : config.proxies.find((p) => p.id === e.proxy)?.name ?? e.proxy;
+            const proxyName = e.proxy === "direct" ? "直连" : e.proxy === "system" ? "系统代理" : (config.proxies.find((p) => p.id === e.proxy)?.name ?? e.proxy);
             return (
               <button key={e.id} className={`ep-card ${e.enabled ? "" : "off"}`} onClick={() => go({ name: "endpoint", id: e.id })}>
                 <div className="ep-card-top">

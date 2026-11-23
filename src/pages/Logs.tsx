@@ -3,7 +3,7 @@ import { ArrowRight, CornerDownRight, Radio, RefreshCw, ScrollText, Search, Term
 import { api, listen, LogBodies, LogQuery, LogRecord } from "../api";
 import { useApp } from "../App";
 import { CopyButton, Empty, Modal, StatusDot, useToast } from "../components/ui";
-import { fmtCost, fmtMs, fmtNum, fmtTime, pretty, statusTone } from "../utils";
+import { fmtMs, fmtNum, fmtTime, pretty, statusTone } from "../utils";
 
 const PAGE = 100;
 
@@ -58,9 +58,6 @@ export default function Logs({ initialEndpoint }: { initialEndpoint?: string }) 
         <div className="page-header" style={{ marginTop: 0 }}>
           <div>
             <h1 className="page-title">请求日志</h1>
-            <div className="page-subtitle">
-              完整的请求和响应内容保留 {config.logging.bodyRetentionHours} 小时，摘要保留 {config.logging.statsRetentionDays} 天
-            </div>
           </div>
           <div className="header-actions">
             <button className={`btn ${live ? "btn-soft" : ""}`} onClick={() => setLive(!live)} title="有新请求时自动出现在列表顶部">
@@ -122,9 +119,6 @@ export default function Logs({ initialEndpoint }: { initialEndpoint?: string }) 
                     输入 / 输出
                   </th>
                   <th style={{ width: 84, textAlign: "right" }}>耗时</th>
-                  <th className="col-optional" style={{ width: 76, textAlign: "right" }}>
-                    费用
-                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -167,7 +161,6 @@ export default function Logs({ initialEndpoint }: { initialEndpoint?: string }) 
                       {r.pending ? "…" : `${fmtNum(r.usage.input + r.usage.cacheRead + r.usage.cacheWrite)} / ${fmtNum(r.usage.output)}`}
                     </td>
                     <td className="num">{r.pending ? "…" : fmtMs(r.durationMs)}</td>
-                    <td className="num col-optional">{r.cost ? fmtCost(r.cost) : "—"}</td>
                   </tr>
                 ))}
               </tbody>

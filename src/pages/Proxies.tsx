@@ -2,10 +2,11 @@ import { useEffect, useState } from "react";
 import { Globe, Laptop, Pencil, Plus, Shield, Trash2, Zap } from "lucide-react";
 import { api, ProxyConfig, secretKeys, TestResult } from "../api";
 import { useApp } from "../App";
-import { Confirm, Field, Modal, SecretInput, StatusDot, useToast } from "../components/ui";
+import { Confirm, Field, Hint, Modal, SecretInput, StatusDot, useToast } from "../components/ui";
 import { fmtMs, slugify } from "../utils";
 
-export default function Proxies() {
+/** 设置页里的「出口代理」一节 */
+export function ProxiesSection() {
   const { config, saveConfig } = useApp();
   const [editing, setEditing] = useState<ProxyConfig | "new" | null>(null);
   const [del, setDel] = useState<ProxyConfig | null>(null);
@@ -28,7 +29,15 @@ export default function Proxies() {
           <b>{name}</b>
           <span className="mono-sm">{desc}</span>
           <div className="proxy-used">
-            {eps.length ? eps.map((e) => <span key={e.id} className="tag">{e.name}</span>) : <span className="muted-sm">未被使用</span>}
+            {eps.length ? (
+              eps.map((e) => (
+                <span key={e.id} className="tag">
+                  {e.name}
+                </span>
+              ))
+            ) : (
+              <span className="muted-sm">未被使用</span>
+            )}
           </div>
         </div>
         <div className="proxy-side">
@@ -49,44 +58,38 @@ export default function Proxies() {
   };
 
   return (
-    <div className="page">
-      <div className="page-inner" style={{ maxWidth: 940 }}>
-        <div className="page-header">
-          <div>
-            <h1 className="page-title">出口代理</h1>
-            <div className="page-subtitle">为不同端点指定网络线路，如内部服务直连、官方 API 经代理访问</div>
-          </div>
-          <div className="header-actions">
-            <button className="btn btn-primary" onClick={() => setEditing("new")}>
-              <Plus size={16} />
-              添加代理
-            </button>
-          </div>
-        </div>
-        <div className="proxy-list">
-          {card("direct", "直连", "不经过任何代理，忽略系统代理设置", <Shield size={18} />)}
-          {card("system", "系统代理", "使用 macOS 网络设置中的代理及 HTTPS_PROXY 等环境变量", <Laptop size={18} />)}
-          {config.proxies.map((p) =>
-            card(
-              p.id,
-              p.name,
-              `${p.kind === "socks5" ? "SOCKS5" : "HTTP"} · ${p.url}${p.username ? ` · ${p.username}` : ""}`,
-              <Globe size={18} />,
-              <>
-                <button className="icon-btn" onClick={() => setEditing(p)}>
-                  <Pencil size={15} />
-                </button>
-                <button className="icon-btn" onClick={() => setDel(p)}>
-                  <Trash2 size={15} />
-                </button>
-              </>,
-            ),
-          )}
-        </div>
-        <p className="muted-sm" style={{ marginTop: 16 }}>
-          测试时通过该线路访问 <code>{config.ui.probeUrl}</code>（可在设置中修改）。SOCKS5 代理由代理端解析域名，支持访问内网域名。
-        </p>
+    <div className="settings-group">
+      <div className="group-head">
+        <h3>
+          出口代理
+          <Hint>为端点指定网络线路。测试时经该线路访问 {config.ui.probeUrl}；SOCKS5 由代理端解析域名，可访问内网域名</Hint>
+        </h3>
+        <button className="btn btn-sm btn-soft" onClick={() => setEditing("new")}>
+          <Plus size={14} />
+          添加代理
+        </button>
       </div>
+      <div className="proxy-list">
+        {card("direct", "直连", "不经过任何代理", <Shield size={18} />)}
+        {card("system", "系统代理", "macOS 网络设置中的代理", <Laptop size={18} />)}
+        {config.proxies.map((p) =>
+          card(
+            p.id,
+            p.name,
+            `${p.kind === "socks5" ? "SOCKS5" : "HTTP"} · ${p.url}${p.username ? ` · ${p.username}` : ""}`,
+            <Globe size={18} />,
+            <>
+              <button className="icon-btn" onClick={() => setEditing(p)}>
+                <Pencil size={15} />
+              </button>
+              <button className="icon-btn" onClick={() => setDel(p)}>
+                <Trash2 size={15} />
+              </button>
+            </>,
+          ),
+        )}
+      </div>
+
       {editing && (
         <ProxyDialog
           initial={editing === "new" ? null : editing}
@@ -102,7 +105,13 @@ export default function Proxies() {
       {del && (
         <Confirm
           title={`删除「${del.name}」？`}
-          message={usedBy(del.id).length ? `使用该代理的端点将改为「系统代理」：${usedBy(del.id).map((e) => e.name).join("、")}` : "该代理未被任何端点使用。"}
+          message={
+            usedBy(del.id).length
+              ? `使用该代理的端点将改为「系统代理」：${usedBy(del.id)
+                  .map((e) => e.name)
+                  .join("、")}`
+              : "该代理未被任何端点使用。"
+          }
           danger
           confirmText="删除"
           onClose={() => setDel(null)}
@@ -167,7 +176,12 @@ function ProxyDialog(props: { initial: ProxyConfig | null; onClose: () => void; 
         </div>
       </Field>
       <Field label="地址" help={p.kind === "socks5" ? "例如 127.0.0.1:7890" : "例如 http://proxy.corp.example:8080"}>
-        <input className="input mono" value={p.url} placeholder={p.kind === "socks5" ? "127.0.0.1:7890" : "http://host:port"} onChange={(e) => setP({ ...p, url: e.target.value.trim() })} />
+        <input
+          className="input mono"
+          value={p.url}
+          placeholder={p.kind === "socks5" ? "127.0.0.1:7890" : "http://host:port"}
+          onChange={(e) => setP({ ...p, url: e.target.value.trim() })}
+        />
       </Field>
       <div className="row">
         <Field label="用户名（可选）">

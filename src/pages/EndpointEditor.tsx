@@ -3,7 +3,7 @@ import { ArrowLeft, CloudDownload, Plus, Save, Sparkles, TerminalSquare, Trash2,
 import { api, applyModelInfo, AuthMode, EndpointConfig, ModelConfig, newEndpoint, newModel, PROTOCOLS, secretKeys } from "../api";
 import { useApp } from "../App";
 import { ModelChain } from "../components/ModelInput";
-import { Field, SecretInput, Switch, useToast } from "../components/ui";
+import { Field, SecretInput, Switch, useToast, Hint } from "../components/ui";
 import UpstreamModelsDialog from "../components/UpstreamModelsDialog";
 import TestDialog from "../components/TestDialog";
 import ProcessPanel from "../components/ProcessPanel";
@@ -336,15 +336,15 @@ export default function EndpointEditor({ id }: { id: string | null }) {
         <div className="settings-group">
           <h3>
             本地服务
-            <span className="h3-hint">托管一个命令行服务进程（如内部服务代理），由其负责认证与协议转换</span>
+            <Hint>托管一个命令行服务进程（如内部服务代理），由其负责认证与协议转换</Hint>
           </h3>
           <div className="panel">
             <div className="setting-row">
               <div className="setting-text">
                 <b>
                   <TerminalSquare size={14} /> 托管本地服务进程
+                  <Hint>随 App 启动，异常退出后自动重启，App 退出时一并结束</Hint>
                 </b>
-                <span>随 App 启动，异常退出后自动重启，App 退出时一并结束</span>
               </div>
               <Switch on={ep.process.enabled} onChange={(v) => set("process", { ...ep.process, enabled: v })} />
             </div>
@@ -401,7 +401,7 @@ export default function EndpointEditor({ id }: { id: string | null }) {
         <div className="settings-group">
           <h3>
             模型
-            <span className="h3-hint">未列出的模型也可通过「{ep.id || "前缀"}/模型 ID」直接透传</span>
+            <Hint>未列出的模型也可通过「{ep.id || "前缀"}/模型 ID」直接透传</Hint>
           </h3>
           <div className="panel">
             <table className="grid-table">
@@ -499,7 +499,7 @@ export default function EndpointEditor({ id }: { id: string | null }) {
         <div className="settings-group">
           <h3>
             故障切换
-            <span className="h3-hint">该端点请求失败时依次尝试以下模型，触发条件在「设置」中配置</span>
+            <Hint>该端点请求失败时依次尝试以下模型，触发条件在「设置」中配置</Hint>
           </h3>
           <div className="panel panel-pad">
             <ModelChain value={ep.fallbacks} onChange={(v) => set("fallbacks", v)} exclude={ep.models.map((m) => `${ep.id}/${m.name}`)} />
@@ -527,22 +527,28 @@ export default function EndpointEditor({ id }: { id: string | null }) {
               <>
                 <div className="setting-row">
                   <div className="setting-text">
-                    <b>回传思考内容（reasoning_content）</b>
-                    <span>DeepSeek 等在工具调用的多轮对话中需要把思考内容带回去</span>
+                    <b>
+                      回传思考内容（reasoning_content）
+                      <Hint>DeepSeek 等在工具调用的多轮对话中需要把思考内容带回去</Hint>
+                    </b>
                   </div>
                   <Switch on={ep.compat.sendReasoningContent} onChange={(v) => set("compat", { ...ep.compat, sendReasoningContent: v })} />
                 </div>
                 <div className="setting-row">
                   <div className="setting-text">
-                    <b>使用 max_completion_tokens</b>
-                    <span>OpenAI 的推理模型不接受 max_tokens</span>
+                    <b>
+                      使用 max_completion_tokens
+                      <Hint>OpenAI 的推理模型不接受 max_tokens</Hint>
+                    </b>
                   </div>
                   <Switch on={ep.compat.useMaxCompletionTokens} onChange={(v) => set("compat", { ...ep.compat, useMaxCompletionTokens: v })} />
                 </div>
                 <div className="setting-row">
                   <div className="setting-text">
-                    <b>发送 reasoning_effort</b>
-                    <span>把客户端的思考强度转成 low / medium / high</span>
+                    <b>
+                      发送 reasoning_effort
+                      <Hint>把客户端的思考强度转成 low / medium / high</Hint>
+                    </b>
                   </div>
                   <Switch on={ep.compat.sendReasoningEffort} onChange={(v) => set("compat", { ...ep.compat, sendReasoningEffort: v })} />
                 </div>
@@ -550,15 +556,19 @@ export default function EndpointEditor({ id }: { id: string | null }) {
             )}
             <div className="setting-row">
               <div className="setting-text">
-                <b>不发送 temperature / top_p</b>
-                <span>部分推理模型传了会报错</span>
+                <b>
+                  不发送 temperature / top_p
+                  <Hint>部分推理模型传了会报错</Hint>
+                </b>
               </div>
               <Switch on={ep.compat.dropSamplingParams} onChange={(v) => set("compat", { ...ep.compat, dropSamplingParams: v })} />
             </div>
             <div className="setting-row">
               <div className="setting-text">
-                <b>首字节超时</b>
-                <span>等待上游开始响应的最长时间，超时会触发故障切换</span>
+                <b>
+                  首字节超时
+                  <Hint>等待上游开始响应的最长时间，超时会触发故障切换</Hint>
+                </b>
               </div>
               <div className="input-suffix">
                 <input
@@ -574,8 +584,10 @@ export default function EndpointEditor({ id }: { id: string | null }) {
             </div>
             <div className="setting-row column">
               <div className="setting-text">
-                <b>附加请求头</b>
-                <span>每行一个，格式 Name: Value</span>
+                <b>
+                  附加请求头
+                  <Hint>每行一个，格式 Name: Value</Hint>
+                </b>
               </div>
               <textarea className="textarea mono" rows={3} value={headersText} placeholder="X-Team: ai-infra" onChange={(e) => setHeadersText(e.target.value)} />
             </div>
