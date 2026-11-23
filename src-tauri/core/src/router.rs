@@ -24,8 +24,12 @@ pub struct Target {
 /// 去掉客户端可能加上的修饰：`claude@` 前缀、Claude Code 的 `[1m]` 后缀
 pub fn normalize_name(name: &str) -> String {
     let mut n = name.trim();
-    if let Some(rest) = n.strip_prefix(CLAUDE_ALIAS) {
-        n = rest;
+    // `claude@前缀/模型`、`claude-sonnet-4-6@前缀/模型`：桌面版要求名字里带 Claude 模型，前面这段只是给它看的。
+    // 后半段必须带 `/`，避免误伤 Vertex 那种 `claude-sonnet-4-5@20250929`
+    if let Some((head, rest)) = n.split_once('@') {
+        if head.to_ascii_lowercase().starts_with("claude") && !head.contains('/') && rest.contains('/') {
+            n = rest;
+        }
     }
     if let Some(i) = n.rfind('[') {
         if n.ends_with(']') {

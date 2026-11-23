@@ -1150,7 +1150,48 @@ impl IntoResponse for Json {
 }
 
 async fn anthropic_messages(State(g): State<Gateway>, headers: HeaderMap, RawQuery(q): RawQuery, body: Bytes) -> Response {
-    g.handle(Protocol::Anthropic, "/v1/messages", headers, q, body, None).await
+    if !is_probe(&body) {
+        return g.handle(Protocol::Anthropic, "/v1/messages", headers, q, body, None).await;
+    }
+    // 客户端的连通性探测（Claude 桌面版、curl 测试等）：只要 1 个 token，客户端等得不久。
+    // 上游慢（比如内部服务在登录、模型在思考）时先回一个错误，让客户端知道网关本身是通的
+    let requested = serde_json::from_slice::<Value>(&body)
+        .ok()
+        .and_then(|v| v.get("model").and_then(Value::as_str).map(String::from))
+        .unwrap_or_default();
+    let started = Instant::now();
+    match tokio::time::timeout(Duration::from_secs(PROBE_WAIT_SECS), g.handle(Protocol::Anthropic, "/v1/messages", headers, q, body, None)).await {
+        Ok(r) => r,
+        Err(_) => {
+            let msg = format!("网关已连通，但上游在 {PROBE_WAIT_SECS} 秒内没有回应这次连通性测试（模型 {requested}）");
+            g.log(
+                LogRecord {
+                    id: new_id(""),
+                    ts: now_millis(),
+                    client_protocol: Protocol::Anthropic.label().into(),
+                    path: "/v1/messages".into(),
+                    requested_model: requested,
+                    status: 504,
+                    error: msg.clone(),
+                    duration_ms: started.elapsed().as_millis() as i64,
+                    ..Default::default()
+                },
+                None,
+            );
+            error_response(Protocol::Anthropic, 504, &msg)
+        }
+    }
+}
+
+/// 连通性探测最多等几秒
+const PROBE_WAIT_SECS: u64 = 8;
+
+/// max_tokens 不超过 1 的请求只可能是连通性测试
+fn is_probe(body: &[u8]) -> bool {
+    serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|v| v.get("max_tokens").and_then(Value::as_u64))
+        .is_some_and(|n| n <= 1)
 }
 
 async fn anthropic_count_tokens(State(g): State<Gateway>, headers: HeaderMap, RawQuery(q): RawQuery, body: Bytes) -> Response {
@@ -1330,4 +1371,14 @@ fn truncate_str(mut s: String, max: usize) -> String {
         s.push_str(&format!("\n…（已截断，原始大小 {} KB）", total / 1024));
     }
     s
+}
+
+#[cfg(test)]
+mod probe_tests {
+    #[test]
+    fn detects_probe() {
+        assert!(super::is_probe(br#"{"model":"x","max_tokens":1,"messages":[]}"#));
+        assert!(!super::is_probe(br#"{"model":"x","max_tokens":4096,"messages":[]}"#));
+        assert!(!super::is_probe(br#"{"model":"x","messages":[]}"#));
+    }
 }

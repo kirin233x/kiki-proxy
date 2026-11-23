@@ -499,6 +499,20 @@ pub struct DesktopModel {
     /// 列表里显示的名字
     pub label: String,
     pub supports_1m: bool,
+    /// 桌面版把这个模型当成哪个 Claude 模型（决定思考强度、上下文等），如 `claude-sonnet-4-6`
+    #[serde(default)]
+    pub behaves_as: String,
+}
+
+/// 默认当成的 Claude 模型
+pub const DEFAULT_BEHAVES_AS: &str = "claude-sonnet-4-6";
+
+/// 名字里是否已经带了带版本号的 Claude 模型（如 `claude-sonnet-4-5`、`anthropic/claude-haiku-4-5`）
+pub fn names_claude_model(name: &str) -> bool {
+    let l = name.to_lowercase();
+    ["claude-opus-", "claude-sonnet-", "claude-haiku-", "claude-fable-"]
+        .iter()
+        .any(|f| l.split(f).nth(1).is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit())))
 }
 
 /// 桌面版「Import configuration…」可以导入的 JSON 配置（键名见 Claude 桌面版第三方推理配置文档）
@@ -506,13 +520,21 @@ pub fn desktop_config(port: u16, access_key: &str, models: &[DesktopModel]) -> V
     let list: Vec<Value> = models
         .iter()
         .map(|m| {
-            let lower = m.name.to_lowercase();
-            let name = if lower.contains("claude") || lower.contains("anthropic") {
-                m.name.clone()
+            // 桌面版只认 Claude 模型：名字里没有的，写成 `claude-sonnet-4-6@前缀/模型`，并用 behavesAs 说明当成哪个模型。
+            // 网关收到后会去掉 @ 前面这段
+            let (name, behaves) = if names_claude_model(&m.name) {
+                (m.name.clone(), None)
             } else {
-                format!("{}{}", crate::router::CLAUDE_ALIAS, m.name)
+                let b = if m.behaves_as.trim().is_empty() { DEFAULT_BEHAVES_AS } else { m.behaves_as.trim() };
+                (format!("{b}@{}", crate::router::normalize_name(&m.name)), Some(b.to_string()))
             };
             let mut o = json!({ "name": name });
+            if let Some(b) = behaves {
+                o["behavesAs"] = json!(b);
+                if m.label.is_empty() {
+                    o["labelOverride"] = json!(m.name);
+                }
+            }
             if !m.label.is_empty() {
                 o["labelOverride"] = json!(m.label);
             }
@@ -654,15 +676,29 @@ mod tests {
             41521,
             "",
             &[
-                DesktopModel { name: "internal/sonnet".into(), label: "Sonnet（内部）".into(), supports_1m: true },
-                DesktopModel { name: "anthropic/claude-haiku-4-5".into(), label: String::new(), supports_1m: false },
+                DesktopModel { name: "internal/sonnet".into(), label: "Sonnet（内部）".into(), supports_1m: true, behaves_as: String::new() },
+                DesktopModel { name: "anthropic/claude-haiku-4-5".into(), label: String::new(), supports_1m: false, behaves_as: String::new() },
+                DesktopModel { name: "ds/deepseek-chat".into(), label: String::new(), supports_1m: false, behaves_as: "claude-opus-4-6".into() },
             ],
         );
         assert_eq!(v["inferenceProvider"], json!("gateway"));
         assert_eq!(v["inferenceGatewayBaseUrl"], json!("http://127.0.0.1:41521"));
         assert_eq!(v["inferenceGatewayApiKey"], json!("kiki-proxy"));
-        assert_eq!(v["inferenceModels"][0], json!({"name":"claude@internal/sonnet","labelOverride":"Sonnet（内部）","supports1m":true}));
+        assert_eq!(
+            v["inferenceModels"][0],
+            json!({"name":"claude-sonnet-4-6@internal/sonnet","behavesAs":"claude-sonnet-4-6","labelOverride":"Sonnet（内部）","supports1m":true})
+        );
         assert_eq!(v["inferenceModels"][1], json!({"name":"anthropic/claude-haiku-4-5"}));
+        assert_eq!(
+            v["inferenceModels"][2],
+            json!({"name":"claude-opus-4-6@ds/deepseek-chat","behavesAs":"claude-opus-4-6","labelOverride":"ds/deepseek-chat"})
+        );
+        // 网关能把这些名字还原
+        assert_eq!(crate::router::normalize_name("claude-opus-4-6@ds/deepseek-chat"), "ds/deepseek-chat");
+        assert_eq!(crate::router::normalize_name("claude@internal/sonnet[1m]"), "internal/sonnet");
+        assert_eq!(crate::router::normalize_name("claude-sonnet-4-5@20250929"), "claude-sonnet-4-5@20250929");
+        assert!(names_claude_model("anthropic/claude-haiku-4-5"));
+        assert!(!names_claude_model("claude@internal/sonnet"));
     }
 }
 

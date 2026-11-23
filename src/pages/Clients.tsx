@@ -318,9 +318,11 @@ function DesktopCard(props: { baseUrl: string; apiKey: string }) {
   const [picked, setPicked] = useState<string[] | null>(null);
   const [first, setFirst] = useState("");
   const [file, setFile] = useState("");
+  const [behaves, setBehaves] = useState<Record<string, string>>({});
   useEffect(() => {
     api.desktopConnected().then(setConnected);
   }, []);
+  const behavesOf = (id: string) => behaves[id] ?? guessBehaves(id);
   const list = picked ?? models.map((m) => m.id);
   const ordered = useMemo(() => {
     const def = first && list.includes(first) ? first : list[0];
@@ -330,7 +332,12 @@ function DesktopCard(props: { baseUrl: string; apiKey: string }) {
   const exportFile = async () => {
     const payload: DesktopModel[] = ordered.map((id) => {
       const m = models.find((x) => x.id === id)!;
-      return { name: id, label: m.displayName !== id ? m.displayName : "", supports1m: m.contextWindow >= 1_000_000 };
+      return {
+        name: id,
+        label: m.displayName !== id ? m.displayName : "",
+        supports1m: m.contextWindow >= 1_000_000,
+        behavesAs: namesClaude(id) ? "" : behavesOf(id),
+      };
     });
     try {
       setFile(await api.exportDesktopConfig(payload));
@@ -360,6 +367,21 @@ function DesktopCard(props: { baseUrl: string; apiKey: string }) {
                   />
                   <code>{m.id}</code>
                   {m.contextWindow >= 1_000_000 && <span className="tag accent">1M</span>}
+                  {on && !namesClaude(m.id) && (
+                    <select
+                      className="desk-behaves"
+                      title="桌面版只认 Claude 模型，这个模型在桌面版里按哪个 Claude 模型处理（思考强度、上下文上限）。实际请求仍然发给这个模型"
+                      value={behavesOf(m.id)}
+                      onClick={(e) => e.preventDefault()}
+                      onChange={(e) => setBehaves({ ...behaves, [m.id]: e.target.value })}
+                    >
+                      {BEHAVES.map(([v, t]) => (
+                        <option key={v} value={v}>
+                          按 {t}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                   {on && (
                     <button className={`desk-def ${ordered[0] === m.id ? "is" : ""}`} onClick={(e) => (e.preventDefault(), setFirst(m.id))}>
                       {ordered[0] === m.id ? "默认" : "设为默认"}
@@ -484,4 +506,25 @@ function ClaudeCheck(props: { refreshKey: unknown }) {
       )}
     </div>
   );
+}
+
+/** 桌面版认识的 Claude 模型，用来说明网关里的其他模型「按哪个处理」 */
+const BEHAVES: [string, string][] = [
+  ["claude-sonnet-4-6", "Sonnet 4.6"],
+  ["claude-opus-4-6", "Opus 4.6"],
+  ["claude-haiku-4-5", "Haiku 4.5"],
+  ["claude-sonnet-5", "Sonnet 5"],
+  ["claude-opus-5", "Opus 5"],
+];
+
+/** 名字里已经带了带版本号的 Claude 模型，桌面版能直接认出来 */
+function namesClaude(id: string) {
+  return /claude-(opus|sonnet|haiku|fable)-\d/i.test(id);
+}
+
+function guessBehaves(id: string) {
+  const l = id.toLowerCase();
+  if (l.includes("opus")) return "claude-opus-4-6";
+  if (l.includes("haiku") || l.includes("flash") || l.includes("mini")) return "claude-haiku-4-5";
+  return "claude-sonnet-4-6";
 }

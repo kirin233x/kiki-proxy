@@ -259,6 +259,8 @@ export interface DesktopModel {
   name: string;
   label: string;
   supports1m: boolean;
+  /** 桌面版把它当成哪个 Claude 模型 */
+  behavesAs: string;
 }
 
 export interface ApplyOptions {
