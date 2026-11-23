@@ -481,17 +481,11 @@ impl Gateway {
             rec.proxy = target.proxy.clone();
             rec.rule = target.rule.clone().unwrap_or_default();
 
-            // 1. 请求体：同协议透传（只换模型名），否则经 IR 转换
+            // 1. 请求体：同协议纯透传，只换模型名；其余内容一个字节都不改。不同协议才经 IR 转换
             let up_body = if up == client {
                 let mut b = json.clone();
                 if up != Protocol::Gemini {
                     b["model"] = json!(target.upstream_model);
-                }
-                // 只有官方 API 认识 messages 里的 system 角色，其他 Anthropic 兼容服务一律并进用户消息
-                if up == Protocol::Anthropic && !ep.base_url.contains("api.anthropic.com") {
-                    if let Some(Value::Array(msgs)) = b.get_mut("messages") {
-                        crate::protocol::anthropic::fold_system_messages(msgs);
-                    }
                 }
                 b
             } else {

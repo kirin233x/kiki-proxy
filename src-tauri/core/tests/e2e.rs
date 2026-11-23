@@ -376,3 +376,35 @@ async fn direct_proxy_setting_persists() {
     assert_eq!(gw2.config().endpoint("internal").unwrap().proxy, "direct");
     assert!(std::fs::read_to_string(dir.join("config.toml")).unwrap().contains("proxy = \"direct\""));
 }
+
+/// 同协议透传：请求体除了 model 以外原样转发（包括 messages 里 role 为 system 的消息、未知字段）
+#[tokio::test]
+async fn same_protocol_passthrough_is_untouched() {
+    let env = setup().await;
+    let body = json!({
+        "model": "an/claude",
+        "max_tokens": 32000,
+        "stream": false,
+        "thinking": {"type": "adaptive", "display": "omitted"},
+        "context_management": {"edits": []},
+        "system": [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}],
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "任务"}]},
+            {"role": "system", "content": "插件提示"},
+        ],
+        "metadata": {"user_id": "u1"},
+    });
+    let r = reqwest::Client::new()
+        .post(format!("http://127.0.0.1:{}/v1/messages", env.gw_port))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 200);
+    let seen = env.upstream.seen.lock().unwrap();
+    let (_, sent, _) = seen.last().unwrap();
+    let sent: Value = serde_json::from_str(sent).unwrap();
+    let mut want = body.clone();
+    want["model"] = json!("claude-real");
+    assert_eq!(sent, want);
+}
