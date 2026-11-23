@@ -490,76 +490,120 @@ pub fn restore(client: &str) -> Result<()> {
 
 // ------------------------------------------------------------------ Claude Code 桌面版
 
-/// 桌面版模型列表里的一项
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopModel {
-    /// 发给网关的模型名（名字里没有 claude 的会加上 claude@ 前缀，桌面版只认 Claude 模型）
-    pub name: String,
-    /// 列表里显示的名字
-    pub label: String,
-    pub supports_1m: bool,
-    /// 桌面版把这个模型当成哪个 Claude 模型（决定思考强度、上下文等），如 `claude-sonnet-4-6`
-    #[serde(default)]
-    pub behaves_as: String,
+/// kiki-proxy 写进桌面版配置库的配置 id（固定一个，重复应用时原地更新）
+pub const DESKTOP_PROFILE_ID: &str = "6b696b69-7072-4f78-8079-6b696b690001";
+/// 桌面版请求走的路径前缀：这个前缀下的模型名按「桌面版模型路由」换成真实模型
+pub const DESKTOP_PATH: &str = "/claude-desktop";
+
+pub fn desktop_base_url(port: u16) -> String {
+    format!("{}{DESKTOP_PATH}", base_url(port))
 }
 
-/// 默认当成的 Claude 模型
-pub const DEFAULT_BEHAVES_AS: &str = "claude-sonnet-4-6";
-
-/// 名字里是否已经带了带版本号的 Claude 模型（如 `claude-sonnet-4-5`、`anthropic/claude-haiku-4-5`）
-pub fn names_claude_model(name: &str) -> bool {
-    let l = name.to_lowercase();
-    ["claude-opus-", "claude-sonnet-", "claude-haiku-", "claude-fable-"]
+/// 桌面版「第三方推理」配置（键名见 Claude 桌面版文档，写法和 cc-switch 一致）
+pub fn desktop_config(port: u16, access_key: &str, routes: &[crate::config::DesktopRoute]) -> Value {
+    let models: Vec<Value> = routes
         .iter()
-        .any(|f| l.split(f).nth(1).is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit())))
-}
-
-/// 桌面版「Import configuration…」可以导入的 JSON 配置（键名见 Claude 桌面版第三方推理配置文档）
-pub fn desktop_config(port: u16, access_key: &str, models: &[DesktopModel]) -> Value {
-    let list: Vec<Value> = models
-        .iter()
-        .map(|m| {
-            // 桌面版只认 Claude 模型：名字里没有的，写成 `claude-sonnet-4-6@前缀/模型`，并用 behavesAs 说明当成哪个模型。
-            // 网关收到后会去掉 @ 前面这段
-            let (name, behaves) = if names_claude_model(&m.name) {
-                (m.name.clone(), None)
-            } else {
-                let b = if m.behaves_as.trim().is_empty() { DEFAULT_BEHAVES_AS } else { m.behaves_as.trim() };
-                (format!("{b}@{}", crate::router::normalize_name(&m.name)), Some(b.to_string()))
-            };
-            let mut o = json!({ "name": name });
-            if let Some(b) = behaves {
-                o["behavesAs"] = json!(b);
-                if m.label.is_empty() {
-                    o["labelOverride"] = json!(m.name);
-                }
-            }
-            if !m.label.is_empty() {
-                o["labelOverride"] = json!(m.label);
-            }
-            if m.supports_1m {
+        .map(|r| {
+            let label = if r.label.trim().is_empty() { r.model.as_str() } else { r.label.trim() };
+            let mut o = json!({ "name": r.id, "labelOverride": label });
+            if r.supports_1m {
                 o["supports1m"] = json!(true);
+                // 只列一行，交给 Claude Code 时自动按 1M 用
+                o["prefer1m"] = json!(true);
             }
             o
         })
         .collect();
     json!({
         "inferenceProvider": "gateway",
-        "inferenceGatewayBaseUrl": base_url(port),
+        "inferenceGatewayBaseUrl": desktop_base_url(port),
         "inferenceGatewayApiKey": token(access_key),
         "inferenceGatewayAuthScheme": "bearer",
-        "inferenceModels": list,
+        "inferenceModels": models,
+        "modelDiscoveryEnabled": true,
     })
 }
 
+/// 桌面版能接受的模型名：`claude-`（或 `anthropic/claude-`）+ sonnet/opus/haiku/fable + `-` + 版本
+pub fn is_desktop_safe_id(id: &str) -> bool {
+    let l = id.trim().to_ascii_lowercase();
+    let Some(tail) = l.strip_prefix("anthropic/claude-").or_else(|| l.strip_prefix("claude-")) else {
+        return false;
+    };
+    tail.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+        && ["sonnet-", "opus-", "haiku-", "fable-"]
+            .iter()
+            .any(|p| tail.strip_prefix(p).is_some_and(|rest| !rest.is_empty()))
+}
+
 /// 写到「下载」文件夹，返回文件路径
-pub fn write_desktop_config(port: u16, access_key: &str, models: &[DesktopModel]) -> Result<PathBuf> {
+pub fn write_desktop_config(port: u16, access_key: &str, routes: &[crate::config::DesktopRoute]) -> Result<PathBuf> {
     let dir = home()?.join("Downloads");
     let dir = if dir.is_dir() { dir } else { home()? };
     let p = dir.join("kiki-proxy-claude-desktop.json");
-    write_json(&p, &desktop_config(port, access_key, models))?;
+    write_json(&p, &desktop_config(port, access_key, routes))?;
     Ok(p)
+}
+
+fn desktop_dirs() -> Result<(PathBuf, PathBuf)> {
+    let base = home()?.join("Library/Application Support");
+    Ok((base.join("Claude"), base.join("Claude-3p")))
+}
+
+fn read_json_obj(p: &std::path::Path) -> Value {
+    std::fs::read_to_string(p)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}))
+}
+
+/// 直接写进桌面版的配置库并设为当前配置（和 cc-switch 的做法一样），重启桌面版生效
+pub fn apply_desktop(port: u16, access_key: &str, routes: &[crate::config::DesktopRoute]) -> Result<PathBuf> {
+    if routes.is_empty() {
+        return Err(anyhow!("至少选择一个模型"));
+    }
+    let (normal, threep) = desktop_dirs()?;
+    let lib = threep.join("configLibrary");
+    let profile = lib.join(format!("{DESKTOP_PROFILE_ID}.json"));
+    // 1. 配置本身：保留用户在桌面版里改过的其他项
+    let mut p = read_json_obj(&profile);
+    for (k, v) in desktop_config(port, access_key, routes).as_object().unwrap() {
+        p[k] = v.clone();
+    }
+    write_json(&profile, &p)?;
+    // 2. 配置库目录：登记并设为当前
+    let meta_path = lib.join("_meta.json");
+    backup(&meta_path)?;
+    let mut meta = read_json_obj(&meta_path);
+    let entries = meta["entries"].as_array().cloned().unwrap_or_default();
+    let mut entries: Vec<Value> = entries.into_iter().filter(|e| e["id"] != json!(DESKTOP_PROFILE_ID)).collect();
+    entries.push(json!({ "id": DESKTOP_PROFILE_ID, "name": "kiki-proxy" }));
+    meta["entries"] = json!(entries);
+    meta["appliedId"] = json!(DESKTOP_PROFILE_ID);
+    write_json(&meta_path, &meta)?;
+    // 3. 切到第三方模式
+    for dir in [&normal, &threep] {
+        let f = dir.join("claude_desktop_config.json");
+        backup(&f)?;
+        let mut v = read_json_obj(&f);
+        v["deploymentMode"] = json!("3p");
+        write_json(&f, &v)?;
+    }
+    Ok(profile)
+}
+
+/// 撤销 apply_desktop：恢复桌面版原来的配置，删掉 kiki-proxy 的配置
+pub fn restore_desktop() -> Result<()> {
+    let (normal, threep) = desktop_dirs()?;
+    let lib = threep.join("configLibrary");
+    for f in [lib.join("_meta.json"), normal.join("claude_desktop_config.json"), threep.join("claude_desktop_config.json")] {
+        if backup_path(&f).exists() {
+            restore_file(&f)?;
+        }
+    }
+    let _ = std::fs::remove_file(lib.join(format!("{DESKTOP_PROFILE_ID}.json")));
+    Ok(())
 }
 
 /// 桌面版当前应用的配置是否指向本网关（只是尽力检查：在它的配置库里找网关地址）
@@ -578,6 +622,9 @@ pub fn desktop_connected(port: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 改 HOME 的测试不能并行
+    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// 用户实际遇到的情况：cc-switch 留下的各档模型设置，接入后必须全部换成网关的模型
     #[test]
@@ -612,6 +659,7 @@ mod tests {
         )
         .unwrap();
         // SAFETY: 只有这个测试改 HOME
+        let _g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::set_var("HOME", &home) };
 
         let mut cfg = Config::default();
@@ -672,33 +720,58 @@ mod tests {
 
     #[test]
     fn desktop_config_shape() {
-        let v = desktop_config(
-            41521,
-            "",
-            &[
-                DesktopModel { name: "internal/sonnet".into(), label: "Sonnet（内部）".into(), supports_1m: true, behaves_as: String::new() },
-                DesktopModel { name: "anthropic/claude-haiku-4-5".into(), label: String::new(), supports_1m: false, behaves_as: String::new() },
-                DesktopModel { name: "ds/deepseek-chat".into(), label: String::new(), supports_1m: false, behaves_as: "claude-opus-4-6".into() },
-            ],
-        );
+        use crate::config::DesktopRoute;
+        let routes = vec![
+            DesktopRoute { id: "claude-sonnet-5".into(), model: "internal/sonnet".into(), label: "Sonnet（内部）".into(), supports_1m: true },
+            DesktopRoute { id: "claude-sonnet-5-r2".into(), model: "ds/deepseek-chat".into(), label: String::new(), supports_1m: false },
+        ];
+        let v = desktop_config(41521, "", &routes);
         assert_eq!(v["inferenceProvider"], json!("gateway"));
-        assert_eq!(v["inferenceGatewayBaseUrl"], json!("http://127.0.0.1:41521"));
+        assert_eq!(v["inferenceGatewayBaseUrl"], json!("http://127.0.0.1:41521/claude-desktop"));
         assert_eq!(v["inferenceGatewayApiKey"], json!("kiki-proxy"));
         assert_eq!(
             v["inferenceModels"][0],
-            json!({"name":"claude-sonnet-4-6@internal/sonnet","behavesAs":"claude-sonnet-4-6","labelOverride":"Sonnet（内部）","supports1m":true})
+            json!({"name":"claude-sonnet-5","labelOverride":"Sonnet（内部）","supports1m":true,"prefer1m":true})
         );
-        assert_eq!(v["inferenceModels"][1], json!({"name":"anthropic/claude-haiku-4-5"}));
-        assert_eq!(
-            v["inferenceModels"][2],
-            json!({"name":"claude-opus-4-6@ds/deepseek-chat","behavesAs":"claude-opus-4-6","labelOverride":"ds/deepseek-chat"})
-        );
-        // 网关能把这些名字还原
-        assert_eq!(crate::router::normalize_name("claude-opus-4-6@ds/deepseek-chat"), "ds/deepseek-chat");
-        assert_eq!(crate::router::normalize_name("claude@internal/sonnet[1m]"), "internal/sonnet");
-        assert_eq!(crate::router::normalize_name("claude-sonnet-4-5@20250929"), "claude-sonnet-4-5@20250929");
-        assert!(names_claude_model("anthropic/claude-haiku-4-5"));
-        assert!(!names_claude_model("claude@internal/sonnet"));
+        assert_eq!(v["inferenceModels"][1], json!({"name":"claude-sonnet-5-r2","labelOverride":"ds/deepseek-chat"}));
+        // 写出去的名字必须全部能被桌面版接受，否则整个列表无效
+        for m in v["inferenceModels"].as_array().unwrap() {
+            assert!(is_desktop_safe_id(m["name"].as_str().unwrap()));
+        }
+        for bad in ["claude@internal/sonnet", "claude-sonnet-4-6@internal/sonnet", "internal/sonnet", "claude-sonnet-", "claude-sonnet-5[1m]"] {
+            assert!(!is_desktop_safe_id(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn desktop_apply_and_restore() {
+        use crate::config::DesktopRoute;
+        let home = std::env::temp_dir().join(format!("kiki-home-{}", crate::ir::new_id("")));
+        let threep = home.join("Library/Application Support/Claude-3p");
+        std::fs::create_dir_all(threep.join("configLibrary")).unwrap();
+        let other = json!({"entries":[{"id":"aaaa","name":"Mine"}],"appliedId":"aaaa"});
+        std::fs::write(threep.join("configLibrary/_meta.json"), other.to_string()).unwrap();
+        std::fs::write(threep.join("claude_desktop_config.json"), r#"{"deploymentMode":"1p","keep":1}"#).unwrap();
+        let _g = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("HOME", &home) };
+        let routes = vec![DesktopRoute { id: "claude-opus-5".into(), model: "internal/opus".into(), label: String::new(), supports_1m: false }];
+        apply_desktop(41521, "", &routes).unwrap();
+        let meta = read_json_obj(&threep.join("configLibrary/_meta.json"));
+        assert_eq!(meta["appliedId"], json!(DESKTOP_PROFILE_ID));
+        assert_eq!(meta["entries"].as_array().unwrap().len(), 2);
+        let c = read_json_obj(&threep.join("claude_desktop_config.json"));
+        assert_eq!(c, json!({"deploymentMode":"3p","keep":1}));
+        let p = read_json_obj(&threep.join(format!("configLibrary/{DESKTOP_PROFILE_ID}.json")));
+        assert_eq!(p["inferenceModels"][0]["name"], json!("claude-opus-5"));
+        assert!(desktop_connected(41521));
+        // 再应用一次不会重复登记
+        apply_desktop(41521, "", &routes).unwrap();
+        assert_eq!(read_json_obj(&threep.join("configLibrary/_meta.json"))["entries"].as_array().unwrap().len(), 2);
+        restore_desktop().unwrap();
+        assert_eq!(read_json_obj(&threep.join("configLibrary/_meta.json")), other);
+        assert_eq!(read_json_obj(&threep.join("claude_desktop_config.json")), json!({"deploymentMode":"1p","keep":1}));
+        assert!(!threep.join(format!("configLibrary/{DESKTOP_PROFILE_ID}.json")).exists());
+        assert!(!home.join("Library/Application Support/Claude/claude_desktop_config.json").exists());
     }
 }
 

@@ -2588,3 +2588,10 @@ pre.code {
   background: var(--surface, #fff);
   color: var(--muted);
 }
+
+.desk-manual .btn {
+  margin: 6px 8px 6px 0;
+}
+.desk-steps li .btn + .btn {
+  margin-left: 8px;
+}

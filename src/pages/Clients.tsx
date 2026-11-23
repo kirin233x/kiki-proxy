@@ -1,6 +1,6 @@
-import { ReactNode, useEffect, useMemo, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { Check, Download, FileJson, RotateCcw } from "lucide-react";
-import { api, ApplyOptions, ApplyReport, ClaudeInspection, ClientInfo, DesktopModel, fmtContext } from "../api";
+import { api, ApplyOptions, ApplyReport, ClaudeInspection, ClientInfo, DesktopRoute, fmtContext } from "../api";
 import { useApp } from "../App";
 import ModelInput from "../components/ModelInput";
 import { CopyButton, Modal, Switch, useToast } from "../components/ui";
@@ -310,40 +310,59 @@ function SwitchRow(props: { on: boolean; onChange: (v: boolean) => void; title: 
   );
 }
 
-/** Claude Code 桌面版：生成可导入的配置文件，或者手动填写 */
+/** Claude Code 桌面版：桌面版只接受 claude-sonnet-* 这类名字，给每个模型分配一个「档位名」，请求到网关再换回真实模型 */
 function DesktopCard(props: { baseUrl: string; apiKey: string }) {
-  const { models } = useApp();
+  const { models, config, saveConfig } = useApp();
   const toast = useToast();
   const [connected, setConnected] = useState(false);
-  const [picked, setPicked] = useState<string[] | null>(null);
-  const [first, setFirst] = useState("");
+  const [busy, setBusy] = useState(false);
   const [file, setFile] = useState("");
-  const [behaves, setBehaves] = useState<Record<string, string>>({});
+  const saved = config?.desktop?.routes ?? [];
+  // 每个选中的模型 → 档位；顺序即菜单顺序，第一个是默认模型
+  const [rows, setRows] = useState<{ model: string; role: Role }[]>([]);
+  const [inited, setInited] = useState(false);
+  // 模型列表加载完再初始化：有保存过的路由就用它，否则默认勾前几个
+  useEffect(() => {
+    if (inited || !models.length) return;
+    setRows(
+      saved.length
+        ? saved.map((r) => ({ model: r.model, role: roleOf(r.id) }))
+        : models.slice(0, 6).map((m) => ({ model: m.id, role: guessRole(m.id) })),
+    );
+    setInited(true);
+  }, [models, saved, inited]);
   useEffect(() => {
     api.desktopConnected().then(setConnected);
   }, []);
-  const behavesOf = (id: string) => behaves[id] ?? guessBehaves(id);
-  const list = picked ?? models.map((m) => m.id);
-  const ordered = useMemo(() => {
-    const def = first && list.includes(first) ? first : list[0];
-    return def ? [def, ...list.filter((x) => x !== def)] : [];
-  }, [list, first]);
+  const on = (id: string) => rows.some((r) => r.model === id);
+  const toggle = (id: string) =>
+    setRows(on(id) ? rows.filter((r) => r.model !== id) : [...rows, { model: id, role: guessRole(id) }]);
+  const routes = buildRoutes(rows, models);
+  const idOf = (id: string) => routes.find((r) => r.model === id)?.id ?? "";
 
-  const exportFile = async () => {
-    const payload: DesktopModel[] = ordered.map((id) => {
-      const m = models.find((x) => x.id === id)!;
-      return {
-        name: id,
-        label: m.displayName !== id ? m.displayName : "",
-        supports1m: m.contextWindow >= 1_000_000,
-        behavesAs: namesClaude(id) ? "" : behavesOf(id),
-      };
-    });
+  const run = async (kind: "apply" | "export" | "restore") => {
+    if (!config) return;
+    setBusy(true);
     try {
-      setFile(await api.exportDesktopConfig(payload));
-      toast("配置文件已生成");
+      if (kind === "restore") {
+        await api.restoreDesktopConfig();
+        toast("已恢复桌面版原来的配置，重启桌面版生效");
+      } else {
+        // 先保存路由表，网关才知道 claude-sonnet-5 这些名字对应哪个模型
+        await saveConfig({ ...config, desktop: { routes } });
+        if (kind === "apply") {
+          await api.applyDesktopConfig();
+          toast("已写入桌面版，完全退出桌面版再打开即可");
+        } else {
+          setFile(await api.exportDesktopConfig());
+          toast("配置文件已生成");
+        }
+      }
+      setConnected(await api.desktopConnected());
     } catch (e) {
       toast(String(e), true);
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -352,85 +371,94 @@ function DesktopCard(props: { baseUrl: string; apiKey: string }) {
       <div className="desk">
         <div className="desk-models">
           <div className="desk-label">
-            放进桌面版模型列表的模型
+            放进桌面版的模型
             <span>第一个是默认模型</span>
           </div>
           <div className="desk-list">
             {models.map((m) => {
-              const on = list.includes(m.id);
+              const checked = on(m.id);
+              const row = rows.find((r) => r.model === m.id);
               return (
-                <label key={m.id} className={on ? "on" : ""}>
-                  <input
-                    type="checkbox"
-                    checked={on}
-                    onChange={() => setPicked(on ? list.filter((x) => x !== m.id) : [...list, m.id])}
-                  />
+                <label key={m.id} className={checked ? "on" : ""}>
+                  <input type="checkbox" checked={checked} onChange={() => toggle(m.id)} />
                   <code>{m.id}</code>
                   {m.contextWindow >= 1_000_000 && <span className="tag accent">1M</span>}
-                  {on && !namesClaude(m.id) && (
-                    <select
-                      className="desk-behaves"
-                      title="桌面版只认 Claude 模型，这个模型在桌面版里按哪个 Claude 模型处理（思考强度、上下文上限）。实际请求仍然发给这个模型"
-                      value={behavesOf(m.id)}
-                      onClick={(e) => e.preventDefault()}
-                      onChange={(e) => setBehaves({ ...behaves, [m.id]: e.target.value })}
-                    >
-                      {BEHAVES.map(([v, t]) => (
-                        <option key={v} value={v}>
-                          按 {t}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  {on && (
-                    <button className={`desk-def ${ordered[0] === m.id ? "is" : ""}`} onClick={(e) => (e.preventDefault(), setFirst(m.id))}>
-                      {ordered[0] === m.id ? "默认" : "设为默认"}
-                    </button>
+                  {checked && row && (
+                    <>
+                      <select
+                        className="desk-behaves"
+                        title={`桌面版里显示为 ${idOf(m.id)}，按这个档位处理思考强度等参数；实际请求发给 ${m.id}`}
+                        value={row.role}
+                        onClick={(e) => e.preventDefault()}
+                        onChange={(e) => setRows(rows.map((r) => (r.model === m.id ? { ...r, role: e.target.value as Role } : r)))}
+                      >
+                        {ROLES.map((r) => (
+                          <option key={r} value={r}>
+                            {ROLE_NAME[r]} 档
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        className={`desk-def ${rows[0]?.model === m.id ? "is" : ""}`}
+                        onClick={(e) => (e.preventDefault(), setRows([row, ...rows.filter((r) => r.model !== m.id)]))}
+                      >
+                        {rows[0]?.model === m.id ? "默认" : "设为默认"}
+                      </button>
+                    </>
                   )}
                 </label>
               );
             })}
           </div>
+          <p className="muted-sm desk-note">
+            桌面版只接受 claude-sonnet-*、claude-opus-* 这类模型名，名单里有一个不合格就整个报「Invalid: Model list」。
+            所以 kiki-proxy 给每个模型分配一个这样的名字（同档多个时加 -r2、-r3），菜单里显示的仍是真实模型名，请求到了网关再换回来。
+          </p>
         </div>
 
         <div className="desk-steps">
           <div className="desk-label">接入步骤</div>
           <ol>
             <li>
-              <button className="btn btn-sm btn-primary" onClick={exportFile} disabled={!ordered.length}>
-                <Download size={14} />
-                生成配置文件
-              </button>
-              {file && (
-                <span className="desk-file">
-                  <Check size={13} /> 已保存到 <code>{file}</code>
-                </span>
-              )}
-            </li>
-            <li>
               打开桌面版：Help → Troubleshooting → <b>Enable Developer Mode</b>（只需一次）
             </li>
             <li>
-              Developer → <b>Configure Third-Party Inference…</b> → <b>Import configuration…</b>，选择刚生成的 <FileJson size={12} /> 文件
+              <button className="btn btn-sm btn-primary" onClick={() => run("apply")} disabled={!routes.length || busy}>
+                <Check size={14} />
+                {connected ? "更新到桌面版" : "一键写入桌面版"}
+              </button>
+              {connected && (
+                <button className="btn btn-sm btn-ghost" onClick={() => run("restore")} disabled={busy}>
+                  <RotateCcw size={13} />
+                  恢复
+                </button>
+              )}
             </li>
             <li>
-              点 <b>Apply Changes</b>，再 <b>Relaunch</b>
+              <b>完全退出</b>桌面版（⌘Q）再打开
             </li>
           </ol>
           <details className="desk-manual">
-            <summary>不想导入文件？也可以在那个窗口里手动填</summary>
+            <summary>想自己导入？生成配置文件</summary>
+            <p className="muted-sm">
+              Developer → <b>Configure Third-Party Inference…</b> → <b>Import configuration…</b>，选择生成的 <FileJson size={12} /> 文件，再 Apply
+              Changes、Relaunch。
+            </p>
+            <button className="btn btn-sm" onClick={() => run("export")} disabled={!routes.length || busy}>
+              <Download size={14} />
+              生成配置文件
+            </button>
+            {file && (
+              <span className="desk-file">
+                <Check size={13} /> 已保存到 <code>{file}</code>
+              </span>
+            )}
             <table>
               <tbody>
                 <tr>
-                  <td>Inference provider</td>
-                  <td>
-                    <code>Gateway</code>
-                  </td>
-                </tr>
-                <tr>
                   <td>Gateway base URL</td>
                   <td>
-                    <code>{props.baseUrl}</code> <CopyButton text={props.baseUrl} small />
+                    <code>{props.baseUrl}/claude-desktop</code> <CopyButton text={`${props.baseUrl}/claude-desktop`} small />
                   </td>
                 </tr>
                 <tr>
@@ -439,22 +467,10 @@ function DesktopCard(props: { baseUrl: string; apiKey: string }) {
                     <code>{props.apiKey}</code> <CopyButton text={props.apiKey} small />
                   </td>
                 </tr>
-                <tr>
-                  <td>Gateway auth scheme</td>
-                  <td>
-                    <code>Bearer</code>
-                  </td>
-                </tr>
-                <tr>
-                  <td>Model list</td>
-                  <td className="muted-sm">留空即可，桌面版会从网关拉取模型列表</td>
-                </tr>
               </tbody>
             </table>
           </details>
-          <p className="muted-sm desk-note">
-            用了网关后，桌面版的云端环境和 Remote Control 不可用（官方限制）。官方文档没有说明是否允许 http://127.0.0.1 这样的本机地址，如果提示 Gateway was unreachable，请告诉我。
-          </p>
+          <p className="muted-sm desk-note">用了网关后，桌面版的云端环境和 Remote Control 不可用（官方限制）。改了模型或档位要再点一次「更新到桌面版」并重启桌面版。</p>
         </div>
       </div>
     </ClientCard>
@@ -508,23 +524,42 @@ function ClaudeCheck(props: { refreshKey: unknown }) {
   );
 }
 
-/** 桌面版认识的 Claude 模型，用来说明网关里的其他模型「按哪个处理」 */
-const BEHAVES: [string, string][] = [
-  ["claude-sonnet-4-6", "Sonnet 4.6"],
-  ["claude-opus-4-6", "Opus 4.6"],
-  ["claude-haiku-4-5", "Haiku 4.5"],
-  ["claude-sonnet-5", "Sonnet 5"],
-  ["claude-opus-5", "Opus 5"],
-];
+type Role = "sonnet" | "opus" | "haiku" | "fable";
+const ROLES: Role[] = ["sonnet", "opus", "haiku", "fable"];
+const ROLE_NAME: Record<Role, string> = { sonnet: "Sonnet", opus: "Opus", haiku: "Haiku", fable: "Fable" };
+/** 每个档位给桌面版的名字（和 cc-switch 用的一样，桌面版都认识） */
+const ROLE_ID: Record<Role, string> = {
+  sonnet: "claude-sonnet-5",
+  opus: "claude-opus-5",
+  haiku: "claude-haiku-4-5",
+  fable: "claude-fable-5",
+};
 
-/** 名字里已经带了带版本号的 Claude 模型，桌面版能直接认出来 */
-function namesClaude(id: string) {
-  return /claude-(opus|sonnet|haiku|fable)-\d/i.test(id);
+function roleOf(id: string): Role {
+  return ROLES.find((r) => id.includes(r)) ?? "sonnet";
 }
 
-function guessBehaves(id: string) {
-  const l = id.toLowerCase();
-  if (l.includes("opus")) return "claude-opus-4-6";
-  if (l.includes("haiku") || l.includes("flash") || l.includes("mini")) return "claude-haiku-4-5";
-  return "claude-sonnet-4-6";
+function guessRole(model: string): Role {
+  const l = model.toLowerCase();
+  if (l.includes("opus")) return "opus";
+  if (l.includes("haiku") || l.includes("flash") || l.includes("mini")) return "haiku";
+  return "sonnet";
+}
+
+/** 同档的第二个起加 -r2、-r3… */
+function buildRoutes(rows: { model: string; role: Role }[], models: { id: string; displayName: string; contextWindow: number }[]): DesktopRoute[] {
+  const used = new Map<Role, number>();
+  return rows
+    .filter((r) => models.some((m) => m.id === r.model))
+    .map((r) => {
+      const n = (used.get(r.role) ?? 0) + 1;
+      used.set(r.role, n);
+      const m = models.find((x) => x.id === r.model)!;
+      return {
+        id: n === 1 ? ROLE_ID[r.role] : `${ROLE_ID[r.role]}-r${n}`,
+        model: r.model,
+        label: m.displayName && m.displayName !== m.id ? `${m.displayName}` : m.id,
+        supports1m: m.contextWindow >= 1_000_000,
+      };
+    });
 }

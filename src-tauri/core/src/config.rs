@@ -25,6 +25,28 @@ pub struct Config {
     pub proxies: Vec<ProxyConfig>,
     pub endpoints: Vec<EndpointConfig>,
     pub rules: Vec<RuleConfig>,
+    pub desktop: DesktopConfig,
+}
+
+/// Claude 桌面版的模型路由。桌面版只接受 `claude-sonnet-*`、`claude-opus-*` 这类名字（有一个不合格就整个列表无效），
+/// 所以给每个真实模型分配一个这样的名字，请求到了网关再换回来
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DesktopConfig {
+    pub routes: Vec<DesktopRoute>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DesktopRoute {
+    /// 给桌面版看的名字，如 `claude-sonnet-5`、`claude-sonnet-5-r2`
+    pub id: String,
+    /// 实际使用的网关模型，如 `internal/sonnet`
+    pub model: String,
+    /// 桌面版模型菜单里显示的名字，留空就显示网关模型名
+    pub label: String,
+    #[serde(rename = "supports1m")]
+    pub supports_1m: bool,
 }
 
 

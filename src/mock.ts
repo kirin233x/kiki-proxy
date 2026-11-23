@@ -108,6 +108,7 @@ let config: Config = {
     { id: "r1", name: "后台小任务走 DeepSeek", enabled: true, pattern: "claude-*haiku*", client: "anthropic", target: "ds/deepseek-chat", proxy: "" },
     { id: "r2", name: "Codex 默认模型", enabled: true, pattern: "gpt-5*", client: "openai_responses", target: "internal/sonnet", proxy: "" },
   ],
+  desktop: { routes: [] },
 };
 
 let running = true;
@@ -303,6 +304,10 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
       return r(null);
     case "export_desktop_config":
       return r("/Users/kirin/Downloads/kiki-proxy-claude-desktop.json");
+    case "apply_desktop_config":
+      return r("/Users/kirin/Library/Application Support/Claude-3p/configLibrary/6b696b69-7072-4f78-8079-6b696b690001.json");
+    case "restore_desktop_config":
+      return r(null);
     case "inspect_claude":
       return r({
         files: [

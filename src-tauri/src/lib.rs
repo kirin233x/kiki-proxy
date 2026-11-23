@@ -289,12 +289,26 @@ fn apply_client(state: State<AppState>, client: String, options: ApplyOptions) -
     clients::apply(&client, &state.gateway.config(), &options).map_err(err)
 }
 
+/// 按已保存的「桌面版模型路由」生成可导入的配置文件
 #[tauri::command]
-fn export_desktop_config(app: AppHandle, state: State<AppState>, models: Vec<clients::DesktopModel>) -> CmdResult<String> {
+fn export_desktop_config(app: AppHandle, state: State<AppState>) -> CmdResult<String> {
     let cfg = state.gateway.config();
-    let p = clients::write_desktop_config(cfg.server.port, &cfg.server.access_key, &models).map_err(err)?;
+    let p = clients::write_desktop_config(cfg.server.port, &cfg.server.access_key, &cfg.desktop.routes).map_err(err)?;
     let _ = app.opener().reveal_item_in_dir(&p);
     Ok(p.display().to_string())
+}
+
+/// 直接写进桌面版的配置库并设为当前配置
+#[tauri::command]
+fn apply_desktop_config(state: State<AppState>) -> CmdResult<String> {
+    let cfg = state.gateway.config();
+    let p = clients::apply_desktop(cfg.server.port, &cfg.server.access_key, &cfg.desktop.routes).map_err(err)?;
+    Ok(p.display().to_string())
+}
+
+#[tauri::command]
+fn restore_desktop_config() -> CmdResult<()> {
+    clients::restore_desktop().map_err(err)
 }
 
 #[tauri::command]
@@ -485,6 +499,8 @@ pub fn run() {
             apply_client,
             restore_client,
             export_desktop_config,
+            apply_desktop_config,
+            restore_desktop_config,
             desktop_connected,
             inspect_claude,
             process_status,

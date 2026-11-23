@@ -112,6 +112,8 @@ export interface Config {
   proxies: ProxyConfig[];
   endpoints: EndpointConfig[];
   rules: RuleConfig[];
+  /** Claude 桌面版的模型路由 */
+  desktop: { routes: DesktopRoute[] };
 }
 
 export interface ServerStatus {
@@ -255,12 +257,15 @@ export interface ClaudeInspection {
   issues: ConfigIssue[];
 }
 
-export interface DesktopModel {
-  name: string;
+/** 桌面版只接受 claude-sonnet-* 这类名字，网关按这张表换回真实模型 */
+export interface DesktopRoute {
+  /** 给桌面版看的名字，如 claude-sonnet-5、claude-sonnet-5-r2 */
+  id: string;
+  /** 实际使用的网关模型 */
+  model: string;
+  /** 桌面版菜单里显示的名字，留空显示网关模型名 */
   label: string;
   supports1m: boolean;
-  /** 桌面版把它当成哪个 Claude 模型 */
-  behavesAs: string;
 }
 
 export interface ApplyOptions {
@@ -378,7 +383,11 @@ export const api = {
   applyClient: (client: string, options: ApplyOptions) => invoke<ApplyReport>("apply_client", { client, options }),
   restoreClient: (client: string) => invoke<void>("restore_client", { client }),
   /** 生成 Claude 桌面版可导入的配置文件，返回文件路径 */
-  exportDesktopConfig: (models: DesktopModel[]) => invoke<string>("export_desktop_config", { models }),
+  /** 按已保存的桌面版模型路由生成配置文件 */
+  exportDesktopConfig: () => invoke<string>("export_desktop_config"),
+  /** 直接写进桌面版配置库并设为当前 */
+  applyDesktopConfig: () => invoke<string>("apply_desktop_config"),
+  restoreDesktopConfig: () => invoke<void>("restore_desktop_config"),
   desktopConnected: () => invoke<boolean>("desktop_connected"),
   /** 检查 Claude Code 实际会读到的配置 */
   inspectClaude: () => invoke<ClaudeInspection>("inspect_claude"),

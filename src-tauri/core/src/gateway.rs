@@ -304,6 +304,9 @@ impl Gateway {
             .route("/v1/models", get(list_models))
             .route("/models", get(list_models))
             .route("/v1beta/models", get(list_gemini_models))
+            .route("/claude-desktop/v1/models", get(desktop_models))
+            .route("/claude-desktop/v1/messages", post(desktop_messages))
+            .route("/claude-desktop/v1/messages/count_tokens", post(desktop_count_tokens))
             .route("/v1/messages", post(anthropic_messages))
             .route("/v1/messages/count_tokens", post(anthropic_count_tokens))
             .route("/v1/chat/completions", post(openai_chat))
@@ -1183,6 +1186,70 @@ async fn anthropic_messages(State(g): State<Gateway>, headers: HeaderMap, RawQue
     }
 }
 
+// ------------------------------------------------------------------ Claude 桌面版
+
+/// 把桌面版发来的 `claude-sonnet-5` 之类的名字换成网关模型
+pub fn desktop_target(cfg: &Config, requested: &str) -> Option<String> {
+    let routes = &cfg.desktop.routes;
+    let name = router::normalize_name(requested).to_ascii_lowercase();
+    if let Some(r) = routes.iter().find(|r| r.id.eq_ignore_ascii_case(&name)) {
+        return Some(r.model.clone());
+    }
+    // 桌面版有些后台调用会用完整的官方名（如 claude-haiku-4-5-20251001），按档位找同档的路由；
+    // fable 没配时用 opus 档，都没有就用第一个
+    let role = ["opus", "haiku", "fable", "sonnet"].into_iter().find(|r| name.contains(r));
+    let by_role = |role: &str| routes.iter().find(|r| r.id.to_ascii_lowercase().contains(role));
+    role.and_then(by_role)
+        .or_else(|| (role == Some("fable")).then(|| by_role("opus")).flatten())
+        .or_else(|| routes.first())
+        .map(|r| r.model.clone())
+}
+
+fn desktop_rewrite(cfg: &Config, body: Bytes) -> Bytes {
+    let Ok(mut v) = serde_json::from_slice::<Value>(&body) else { return body };
+    let Some(requested) = v.get("model").and_then(Value::as_str) else { return body };
+    match desktop_target(cfg, requested) {
+        Some(m) => {
+            v["model"] = json!(m);
+            Bytes::from(serde_json::to_vec(&v).unwrap_or_default())
+        }
+        None => body,
+    }
+}
+
+async fn desktop_messages(State(g): State<Gateway>, headers: HeaderMap, q: RawQuery, body: Bytes) -> Response {
+    let body = desktop_rewrite(&g.config(), body);
+    anthropic_messages(State(g), headers, q, body).await
+}
+
+async fn desktop_count_tokens(State(g): State<Gateway>, headers: HeaderMap, RawQuery(q): RawQuery, body: Bytes) -> Response {
+    let body = desktop_rewrite(&g.config(), body);
+    g.count_tokens(Protocol::Anthropic, headers, q, body, None).await
+}
+
+async fn desktop_models(State(g): State<Gateway>) -> Response {
+    let cfg = g.config();
+    let all = router::list_models(&cfg);
+    let data: Vec<Value> = cfg
+        .desktop
+        .routes
+        .iter()
+        .map(|r| {
+            let ctx = all.iter().find(|m| m.id == r.model).map(|m| m.context_window).unwrap_or(0);
+            let label = if r.label.trim().is_empty() { r.model.clone() } else { r.label.clone() };
+            json!({
+                "type": "model", "id": r.id, "display_name": label, "created_at": "2025-01-01T00:00:00Z",
+                "description": format!("kiki-proxy · {}", r.model).chars().take(100).collect::<String>(),
+                "supports1m": r.supports_1m,
+                "max_input_tokens": if ctx > 0 { json!(ctx) } else { Value::Null },
+            })
+        })
+        .collect();
+    let first = data.first().and_then(|d| d.get("id")).cloned().unwrap_or(Value::Null);
+    let last = data.last().and_then(|d| d.get("id")).cloned().unwrap_or(Value::Null);
+    Json(json!({ "data": data, "has_more": false, "first_id": first, "last_id": last })).into_response()
+}
+
 /// 连通性探测最多等几秒
 const PROBE_WAIT_SECS: u64 = 8;
 
@@ -1375,6 +1442,23 @@ fn truncate_str(mut s: String, max: usize) -> String {
 
 #[cfg(test)]
 mod probe_tests {
+    #[test]
+    fn desktop_routes_map_back() {
+        use crate::config::{Config, DesktopRoute};
+        let mut cfg = Config::default();
+        cfg.desktop.routes = vec![
+            DesktopRoute { id: "claude-sonnet-5".into(), model: "internal/sonnet".into(), ..Default::default() },
+            DesktopRoute { id: "claude-sonnet-5-r2".into(), model: "ds/chat".into(), ..Default::default() },
+            DesktopRoute { id: "claude-opus-5".into(), model: "internal/opus".into(), ..Default::default() },
+        ];
+        let t = |m: &str| super::desktop_target(&cfg, m).unwrap();
+        assert_eq!(t("claude-sonnet-5-r2"), "ds/chat");
+        assert_eq!(t("claude-sonnet-5[1m]"), "internal/sonnet");
+        assert_eq!(t("claude-opus-4-8"), "internal/opus");
+        assert_eq!(t("claude-fable-5"), "internal/opus");
+        assert_eq!(t("claude-haiku-4-5-20251001"), "internal/sonnet");
+    }
+
     #[test]
     fn detects_probe() {
         assert!(super::is_probe(br#"{"model":"x","max_tokens":1,"messages":[]}"#));

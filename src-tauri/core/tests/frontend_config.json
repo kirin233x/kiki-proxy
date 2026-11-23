@@ -284,5 +284,8 @@
       "target": "internal/sonnet",
       "proxy": ""
     }
-  ]
+  ],
+  "desktop": {
+    "routes": []
+  }
 }

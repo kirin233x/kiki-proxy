@@ -15,7 +15,7 @@
 - **用量统计**：按模型、按端点统计请求数、token、费用、耗时、失败率。
 - **一键获取模型和价格**：从上游的 `/models` 接口拉取模型列表，勾选添加；价格、上下文窗口、是否支持图片从 [LiteLLM 公开价格表](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) 自动填写（内部模型查不到的手动填）。
 - **上下文窗口**：每个模型可以标注上下文大小。≥ 1M 的模型在 Claude Code 的 `/model` 里带 `[1m]` 后缀；其他模型通过 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 告诉 Claude Code 何时压缩上下文（Claude Code 对不认识的模型名默认按 1M 处理）。上游返回「上下文超长」时，网关会改写成 Claude Code 认识的错误，让它自动压缩后重试。
-- **一键接入客户端**：自动修改 Claude Code / Codex / Gemini CLI 的配置文件（修改前自动备份，可一键恢复）；Claude Code 桌面版可以生成配置文件，在桌面版里导入即可。
+- **一键接入客户端**：自动修改 Claude Code / Codex / Gemini CLI 的配置文件（修改前自动备份，可一键恢复）；Claude Code 桌面版可以一键写入（或生成配置文件导入）。
 
 ## 路由规则
 
@@ -91,7 +91,9 @@ npm run test:core
 
 ## Claude Code 桌面版
 
-桌面版不读 `~/.claude/settings.json`，需要用它自己的「第三方推理」配置。在「客户端接入」页选好要放进桌面版的模型，点「生成配置文件」，然后在桌面版里：Help → Troubleshooting → Enable Developer Mode；Developer → Configure Third-Party Inference… → Import configuration…，选择生成的文件，Apply Changes 后 Relaunch。也可以按页面上列出的值手动填写。
+桌面版不读 `~/.claude/settings.json`，需要用它自己的「第三方推理」配置。先在桌面版里打开 Help → Troubleshooting → Enable Developer Mode（只需一次），再在「客户端接入」页选好模型，点「一键写入桌面版」，完全退出桌面版再打开即可。
+
+桌面版只接受 `claude-sonnet-*`、`claude-opus-*`、`claude-haiku-*`、`claude-fable-*` 这类模型名，有一个不合格就整个列表报「Invalid: Model list」。所以 kiki-proxy 给每个模型分配一个档位名（如 `claude-sonnet-5`，同档多个时是 `claude-sonnet-5-r2`），菜单里显示真实模型名；桌面版的请求走 `http://127.0.0.1:41521/claude-desktop`，网关按这张表换回真实模型。做法参考了 cc-switch。
 
 ## 项目结构
 
