@@ -46,13 +46,12 @@ export default function Clients() {
     // 从当前配置读回：显示名和模型默认名字一样的，视为「自动」
     const tier = (role: string) => c?.tiers?.find((t) => t.role === role);
     const labels: Record<string, string> = {};
-    const oneM: Record<string, boolean> = {};
+
     for (const role of CLAUDE_TIERS) {
       const t = tier(role);
       if (!t?.model) continue;
       const m = modelOf(t.model);
       if (t.label && t.label !== t.model && t.label !== m?.displayName) labels[role] = t.label;
-      oneM[role] = t.supports1m;
     }
     return {
       model: c?.model ?? "",
@@ -63,7 +62,7 @@ export default function Clients() {
       maxContextTokens: c?.maxContextTokens || (id === "claude" ? suggestedCtx : 0),
       subagentModel: c?.subagentModel ?? "",
       tierLabels: labels,
-      tier1m: oneM,
+      tier1m: {},
     };
   };
   const setO = (id: string, patch: Partial<ApplyOptions>) => setOpts({ ...opts, [id]: { ...o(id), ...patch } });
@@ -117,19 +116,13 @@ export default function Clients() {
       effective,
       label: co.tierLabels[role] ?? "",
       autoLabel: m?.displayName ?? effective,
-      oneM: co.tier1m[role] ?? (m ? m.contextWindow >= 1_000_000 : false),
+      ctx: m?.contextWindow ?? 0,
     };
   });
-  const setTier = (role: (typeof CLAUDE_TIERS)[number], patch: { model?: string; label?: string; oneM?: boolean }) => {
+  const setTier = (role: (typeof CLAUDE_TIERS)[number], patch: { model?: string; label?: string }) => {
     const next: Partial<ApplyOptions> = {};
-    if (patch.model !== undefined) {
-      next[tierModelKey[role]] = patch.model;
-      // 换了模型：1M 跟着新模型的上下文走
-      const m = modelOf(patch.model || co.model);
-      next.tier1m = { ...co.tier1m, [role]: m ? m.contextWindow >= 1_000_000 : false };
-    }
+    if (patch.model !== undefined) next[tierModelKey[role]] = patch.model;
     if (patch.label !== undefined) next.tierLabels = { ...co.tierLabels, [role]: patch.label };
-    if (patch.oneM !== undefined) next.tier1m = { ...co.tier1m, [role]: patch.oneM };
     setO("claude", next);
   };
 
@@ -215,8 +208,8 @@ export default function Clients() {
 
               <Section title="模型映射" desc="/model 中 Opus、Sonnet、Haiku 三个角色对应的网关模型。留空沿用默认模型；Haiku 同时用于标题生成等后台任务">
                 <MapTable
-                  cols="150px minmax(0,1fr) minmax(0,1.3fr) 96px"
-                  head={["模型角色", "菜单显示名", "实际请求模型", "声明支持 1M"]}
+                  cols="150px minmax(0,1fr) minmax(0,1.3fr) 72px"
+                  head={["模型角色", "菜单显示名", "实际请求模型", "上下文"]}
                   items={tierRows}
                   keyOf={(r) => r.role}
                   cells={(r) => [
@@ -229,7 +222,7 @@ export default function Clients() {
                       onChange={(e) => setTier(r.role, { label: e.target.value })}
                     />,
                     <ModelInput key="m" value={r.chosen} onChange={(v) => setTier(r.role, { model: v })} placeholder={co.model || "同默认模型"} />,
-                    <Switch key="1m" on={r.oneM} onChange={(v) => setTier(r.role, { oneM: v })} />,
+                    <CtxTag key="c" n={r.ctx} />,
                   ]}
                 />
               </Section>
@@ -606,7 +599,7 @@ function guessRole(model: string): Role {
   return "sonnet";
 }
 
-type DeskRow = { key: string; model: string; role: Role; label: string; oneM: boolean };
+type DeskRow = { key: string; model: string; role: Role; label: string };
 
 /** 生成给桌面版的路由：同一角色的第二个起加 -r2、-r3…（界面上不展示） */
 function buildRoutes(rows: DeskRow[], models: ListedModel[]): DesktopRoute[] {
@@ -621,7 +614,8 @@ function buildRoutes(rows: DeskRow[], models: ListedModel[]): DesktopRoute[] {
         id: n === 1 ? ROLE_ID[r.role] : `${ROLE_ID[r.role]}-r${n}`,
         model: r.model,
         label: r.label.trim() || (m && m.displayName !== m.id ? m.displayName : r.model),
-        supports1m: r.oneM,
+        // 是否 1M 以端点里模型的设置为准
+        supports1m: (m?.contextWindow ?? 0) >= 1_000_000,
       };
     });
 }
@@ -647,9 +641,9 @@ function DesktopCard(props: { baseUrl: string; apiKey: string; connected: boolea
         ? saved.map((r) => {
             const m = modelOf(r.model);
             const auto = m && m.displayName !== m.id ? m.displayName : r.model;
-            return { key: newKey(), model: r.model, role: roleOf(r.id), label: r.label === auto ? "" : r.label, oneM: r.supports1m };
+            return { key: newKey(), model: r.model, role: roleOf(r.id), label: r.label === auto ? "" : r.label };
           })
-        : models.slice(0, 4).map((m) => ({ key: newKey(), model: m.id, role: guessRole(m.id), label: "", oneM: m.contextWindow >= 1_000_000 })),
+        : models.slice(0, 4).map((m) => ({ key: newKey(), model: m.id, role: guessRole(m.id), label: "" })),
     );
     setInited(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -706,15 +700,15 @@ function DesktopCard(props: { baseUrl: string; apiKey: string; connected: boolea
           </>
         }
         action={
-          <button className="btn btn-sm btn-soft" onClick={() => setRows([...rows, { key: newKey(), model: "", role: "sonnet", label: "", oneM: false }])}>
+          <button className="btn btn-sm btn-soft" onClick={() => setRows([...rows, { key: newKey(), model: "", role: "sonnet", label: "" }])}>
             <Plus size={14} />
             添加模型
           </button>
         }
       >
         <MapTable
-          cols="150px minmax(0,1fr) minmax(0,1.3fr) 96px 36px"
-          head={["模型角色", "菜单显示名", "实际请求模型", "声明支持 1M", ""]}
+          cols="150px minmax(0,1fr) minmax(0,1.3fr) 72px 36px"
+          head={["模型角色", "菜单显示名", "实际请求模型", "上下文", ""]}
           items={rows}
           keyOf={(r) => r.key}
           onReorder={(from, to) => setRows(move(rows, from, to))}
@@ -738,11 +732,11 @@ function DesktopCard(props: { baseUrl: string; apiKey: string; connected: boolea
                 value={r.model}
                 onChange={(v) => {
                   const nm = modelOf(v);
-                  setRow(r.key, { model: v, ...(nm ? { oneM: nm.contextWindow >= 1_000_000, role: r.model ? r.role : guessRole(v) } : {}) });
+                  setRow(r.key, { model: v, ...(nm && !r.model ? { role: guessRole(v) } : {}) });
                 }}
                 placeholder="选择模型"
               />,
-              <Switch key="1m" on={r.oneM} onChange={(v) => setRow(r.key, { oneM: v })} />,
+              <CtxTag key="c" n={m?.contextWindow ?? 0} />,
               <button key="del" className="icon-btn danger" title="移除" onClick={() => setRows(rows.filter((x) => x.key !== r.key))}>
                 <Trash2 size={15} />
               </button>,

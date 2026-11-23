@@ -5,6 +5,7 @@ import { useApp } from "../App";
 import TestDialog from "../components/TestDialog";
 import { ProcessBadge } from "../components/ProcessPanel";
 import { Confirm, Empty, Menu, Switch, useToast } from "../components/ui";
+import { SortHandle, useSortable } from "../components/SortableList";
 import { fmtCost, fmtNum, protocolColor } from "../utils";
 
 export default function Endpoints() {
@@ -18,6 +19,20 @@ export default function Endpoints() {
   useEffect(() => {
     api.getStats(1).then((s) => setUsage(Object.fromEntries(s.byEndpoint.map((r) => [r.key, r]))));
   }, []);
+
+  // 拖动排序：先在本地生效再保存，侧栏和模型列表都按这个顺序
+  const [order, setOrder] = useState(config.endpoints);
+  useEffect(() => setOrder(config.endpoints), [config.endpoints]);
+  const sort = useSortable(
+    (from, to) => {
+      const next = [...order];
+      const [x] = next.splice(from, 1);
+      next.splice(to, 0, x);
+      setOrder(next);
+      saveConfig({ ...config, endpoints: next }).catch(() => setOrder(config.endpoints));
+    },
+    { grid: true },
+  );
 
   const update = (id: string, patch: Partial<EndpointConfig>) =>
     saveConfig({ ...config, endpoints: config.endpoints.map((e) => (e.id === id ? { ...e, ...patch } : e)) });
@@ -37,7 +52,9 @@ export default function Endpoints() {
         <div className="page-header">
           <div>
             <h1 className="page-title">端点</h1>
-            <div className="page-subtitle">客户端通过「前缀/模型 ID」访问，如 {config.endpoints[0] ? `${config.endpoints[0].id}/${config.endpoints[0].models[0]?.name ?? "模型"}` : "internal/sonnet"}</div>
+            <div className="page-subtitle">
+              客户端通过「前缀/模型 ID」访问，如 {config.endpoints[0] ? `${config.endpoints[0].id}/${config.endpoints[0].models[0]?.name ?? "模型"}` : "internal/sonnet"}
+            </div>
           </div>
           <div className="header-actions">
             <button className="btn btn-primary" onClick={() => go({ name: "endpoint", id: null })}>
@@ -49,19 +66,29 @@ export default function Endpoints() {
 
         {config.endpoints.length === 0 ? (
           <div className="panel">
-            <Empty icon={<Server size={22} />} title="暂无端点" action={<button className="btn btn-primary" onClick={() => go({ name: "endpoint", id: null })}>添加端点</button>}>
+            <Empty
+              icon={<Server size={22} />}
+              title="暂无端点"
+              action={
+                <button className="btn btn-primary" onClick={() => go({ name: "endpoint", id: null })}>
+                  添加端点
+                </button>
+              }
+            >
               官方 API、中转服务和内部服务均可作为端点
             </Empty>
           </div>
         ) : (
-          <div className="ep-cards">
-            {config.endpoints.map((e) => {
+          <div ref={sort.listRef} className={`ep-cards ${sort.sorting ? "is-sorting" : ""}`}>
+            {order.map((e, i) => {
+              const sr = sort.row(i);
               const u = usage[e.id];
               const typeLabel = protocolLabel(e.protocol);
               const color = protocolColor[e.protocol];
               return (
-                <div key={e.id} className={`ep2 panel ${e.enabled ? "" : "off"}`}>
+                <div key={e.id} {...sr} className={`ep2 panel ${e.enabled ? "" : "off"} ${sr.className}`}>
                   <div className="ep2-head">
+                    <SortHandle {...sort.handle(i)} />
                     <span className="ep-glyph" style={{ background: color }}>
                       {e.name.slice(0, 1).toUpperCase()}
                     </span>
@@ -92,7 +119,9 @@ export default function Endpoints() {
                       <span>今日请求</span>
                     </div>
                     <div>
-                      <b className={u && u.errors / u.requests > 0.05 ? "bad" : ""}>{u?.requests ? `${((u.errors / u.requests) * 100).toFixed(u.errors ? 1 : 0)}%` : "—"}</b>
+                      <b className={u && u.errors / u.requests > 0.05 ? "bad" : ""}>
+                        {u?.requests ? `${((u.errors / u.requests) * 100).toFixed(u.errors ? 1 : 0)}%` : "—"}
+                      </b>
                       <span>失败率</span>
                     </div>
                     <div>
@@ -154,7 +183,11 @@ export default function Endpoints() {
       {del && (
         <Confirm
           title={`删除「${del.name}」？`}
-          message={<>使用 <code>{del.id}/</code> 前缀的请求将无法路由。钥匙串里的 API Key 不会自动删除。</>}
+          message={
+            <>
+              使用 <code>{del.id}/</code> 前缀的请求将无法路由。钥匙串里的 API Key 不会自动删除。
+            </>
+          }
           danger
           confirmText="删除"
           onClose={() => setDel(null)}

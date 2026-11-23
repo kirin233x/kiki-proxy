@@ -4,7 +4,6 @@ import { api, applyModelInfo, AuthMode, EndpointConfig, ModelConfig, newEndpoint
 import { useApp } from "../App";
 import { ModelChain } from "../components/ModelInput";
 import { Field, SecretInput, Switch, useToast } from "../components/ui";
-import ContextSelect from "../components/ContextSelect";
 import UpstreamModelsDialog from "../components/UpstreamModelsDialog";
 import TestDialog from "../components/TestDialog";
 import ProcessPanel from "../components/ProcessPanel";
@@ -94,7 +93,7 @@ export default function EndpointEditor({ id }: { id: string | null }) {
       const hit = infos.filter(Boolean).length;
       setEp((x) => ({ ...x, models: x.models.map((m, i) => (infos[i] ? applyModelInfo(m, infos[i]!) : m)) }));
       const miss = ep.models.filter((_, i) => !infos[i]).map((m) => m.upstream || m.name);
-      toast(miss.length ? `已填充 ${hit} 个模型；未收录：${miss.join("、")}` : `已填充 ${hit} 个模型的上下文与图像支持，保存后生效`, !hit);
+      toast(miss.length ? `已填充 ${hit} 个模型；未收录：${miss.join("、")}` : `已识别 ${hit} 个模型的 1M 与图像支持，保存后生效`, !hit);
     } catch (e) {
       toast(String(e), true);
     } finally {
@@ -411,7 +410,9 @@ export default function EndpointEditor({ id }: { id: string | null }) {
                   <th style={{ width: "24%" }}>模型 ID</th>
                   <th style={{ width: "24%" }}>上游模型 ID</th>
                   <th>显示名称</th>
-                  <th style={{ width: 96 }}>上下文</th>
+                  <th style={{ width: 84 }} title="开启后在 Claude Code、桌面版中按 1M 上下文使用">
+                    支持 1M
+                  </th>
                   <th style={{ width: 56 }}>图像</th>
                   <th style={{ width: 56 }}>启用</th>
                   <th style={{ width: 36 }} />
@@ -440,7 +441,13 @@ export default function EndpointEditor({ id }: { id: string | null }) {
                       />
                     </td>
                     <td>
-                      <ContextSelect value={m.contextWindow} onChange={(v) => updateModel(i, { contextWindow: v })} />
+                      <Switch
+                        on={m.contextWindow >= 1_000_000}
+                        onChange={(v) =>
+                          // 打开记为 1M；关闭时，原来是 1M 的改为未知，原来已知的非 1M 窗口保留
+                          updateModel(i, { contextWindow: v ? 1_000_000 : m.contextWindow >= 1_000_000 ? 0 : m.contextWindow })
+                        }
+                      />
                     </td>
                     <td>
                       <Switch on={m.vision} onChange={(v) => updateModel(i, { vision: v })} />
@@ -476,14 +483,14 @@ export default function EndpointEditor({ id }: { id: string | null }) {
               </button>
               <button className="btn btn-sm" disabled={!ep.models.length || filling} onClick={autoFill}>
                 <Sparkles size={14} />
-                {filling ? "查询中…" : "自动填充上下文"}
+                {filling ? "查询中…" : "自动识别 1M 与图像"}
               </button>
               <span className="muted-sm foot-note">数据来源：LiteLLM 公开模型表；未收录的模型需手动填写</span>
             </div>
           </div>
           {ep.models.some((m) => m.contextWindow >= 1_000_000) && (
             <p className="muted-sm" style={{ margin: "8px 4px 0" }}>
-              上下文 ≥ 1M 的模型在 Claude Code 中以 <code>[1m]</code> 后缀列出并按 1M 上下文使用；Anthropic 端点会自动附加 1M beta 标头。
+              开启「支持 1M」的模型在 Claude Code 中以 <code>[1m]</code> 后缀列出并按 1M 上下文使用；Anthropic 端点会自动附加 1M beta 标头。
             </p>
           )}
         </div>
