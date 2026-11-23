@@ -72,11 +72,14 @@ pub struct RoutingConfig {
     /// 给 Claude Code 的模型列表里，名字不含 claude 的模型加上 `claude@` 前缀，
     /// 否则 Claude Code 的 /model 会把它们过滤掉
     pub claude_alias: bool,
+    /// 模型列表的顺序（网关模型名）。/v1/models、Claude Code 的 /model、本应用里的模型选择都按这个顺序；
+    /// 不在列表里的模型排在后面，保持端点里的顺序
+    pub model_order: Vec<String>,
 }
 
 impl Default for RoutingConfig {
     fn default() -> Self {
-        RoutingConfig { default_model: String::new(), claude_alias: true }
+        RoutingConfig { default_model: String::new(), claude_alias: true, model_order: Vec::new() }
     }
 }
 

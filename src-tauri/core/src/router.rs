@@ -189,6 +189,11 @@ pub fn list_models(cfg: &Config) -> Vec<ListedModel> {
             });
         }
     }
+    // 按用户调整过的顺序排；没排过的保持原顺序（sort_by_key 是稳定排序）
+    let order = &cfg.routing.model_order;
+    if !order.is_empty() {
+        out.sort_by_key(|m| order.iter().position(|x| x == &m.id).unwrap_or(usize::MAX));
+    }
     out
 }
 
@@ -196,6 +201,20 @@ pub fn list_models(cfg: &Config) -> Vec<ListedModel> {
 mod tests {
     use super::*;
     use crate::config::*;
+
+    #[test]
+    fn model_order_is_respected() {
+        let mut c = Config::default();
+        c.endpoints.push(EndpointConfig {
+            id: "a".into(),
+            models: ["m1", "m2", "m3"].iter().map(|n| ModelConfig { name: (*n).into(), ..Default::default() }).collect(),
+            ..Default::default()
+        });
+        let ids = |c: &Config| list_models(c).into_iter().map(|m| m.id).collect::<Vec<_>>();
+        assert_eq!(ids(&c), ["a/m1", "a/m2", "a/m3"]);
+        c.routing.model_order = vec!["a/m3".into(), "a/m1".into()];
+        assert_eq!(ids(&c), ["a/m3", "a/m1", "a/m2"]);
+    }
 
     fn cfg() -> Config {
         let mut c = Config::default();

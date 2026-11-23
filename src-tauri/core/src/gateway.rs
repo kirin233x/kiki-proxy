@@ -487,6 +487,12 @@ impl Gateway {
                 if up != Protocol::Gemini {
                     b["model"] = json!(target.upstream_model);
                 }
+                // 只有官方 API 认识 messages 里的 system 角色，其他 Anthropic 兼容服务一律并进用户消息
+                if up == Protocol::Anthropic && !ep.base_url.contains("api.anthropic.com") {
+                    if let Some(Value::Array(msgs)) = b.get_mut("messages") {
+                        crate::protocol::anthropic::fold_system_messages(msgs);
+                    }
+                }
                 b
             } else {
                 if ir.is_none() {

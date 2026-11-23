@@ -80,7 +80,10 @@ export default function Endpoints() {
                         )}
                       </span>
                     </div>
-                    <Switch on={e.enabled} onChange={(v) => update(e.id, { enabled: v })} />
+                    <label className="ep2-toggle" title={e.enabled ? "点击停用：停用后不再转发到这个端点，也不会启动它的本地程序" : "点击启用"}>
+                      <span>{e.enabled ? "已启用" : "已停用"}</span>
+                      <Switch on={e.enabled} onChange={(v) => update(e.id, { enabled: v })} />
+                    </label>
                   </div>
 
                   <div className="ep2-usage">

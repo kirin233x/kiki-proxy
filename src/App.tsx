@@ -23,7 +23,6 @@ import Logs from "./pages/Logs";
 import StatsPage from "./pages/Stats";
 import Clients from "./pages/Clients";
 import SettingsPage from "./pages/Settings";
-import { protocolColor } from "./utils";
 
 export type Route =
   | { name: "overview" }
@@ -185,7 +184,7 @@ function Shell() {
                 onClick={() => go({ name: "endpoint", id: e.id })}
                 style={{ opacity: e.enabled ? 1 : 0.5 }}
               >
-                <span className="dot" style={{ background: protocolColor[e.protocol] }} />
+                <EndpointDot endpoint={e} gatewayOn={status.running} />
                 <span className="name">{e.name}</span>
                 <span className="num">{e.id}/</span>
               </button>
@@ -239,4 +238,37 @@ export default function App() {
       <Shell />
     </ToastProvider>
   );
+}
+
+/** 侧栏端点状态：启用 = 绿，停用 = 灰；托管了本地程序的，程序没在运行时显示黄/红 */
+function EndpointDot(props: { endpoint: Config["endpoints"][number]; gatewayOn: boolean }) {
+  const e = props.endpoint;
+  const [proc, setProc] = useState<string | null>(null);
+  const watch = e.enabled && e.process.enabled;
+  useEffect(() => {
+    if (!watch) return;
+    let alive = true;
+    const tick = () =>
+      api
+        .processStatus(e.id)
+        .then((s) => alive && setProc(s ? (s.paused ? "stopped" : s.state) : "stopped"))
+        .catch(() => {});
+    tick();
+    const t = setInterval(tick, 3000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [e.id, watch]);
+  let tone = "off";
+  let title = "已停用";
+  if (e.enabled) {
+    tone = props.gatewayOn ? "ok" : "off";
+    title = props.gatewayOn ? "已启用" : "已启用（网关未运行）";
+    if (watch && proc && proc !== "running") {
+      tone = proc === "failed" ? "err" : "warn";
+      title = proc === "failed" ? "本地程序启动失败" : proc === "stopped" ? "本地程序未运行" : "本地程序正在启动";
+    }
+  }
+  return <i className={`sdot ${tone} side-dot`} title={title} />;
 }

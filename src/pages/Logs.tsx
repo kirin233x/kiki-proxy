@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRight, CornerDownRight, Radio, RefreshCw, ScrollText, Search, Terminal, Trash2, X } from "lucide-react";
 import { api, listen, LogBodies, LogQuery, LogRecord } from "../api";
 import { useApp } from "../App";
-import { Confirm, CopyButton, Empty, StatusDot } from "../components/ui";
+import { CopyButton, Empty, Modal, StatusDot, useToast } from "../components/ui";
 import { fmtCost, fmtMs, fmtNum, fmtTime, pretty, statusTone } from "../utils";
 
 const PAGE = 100;
@@ -17,6 +17,7 @@ export default function Logs({ initialEndpoint }: { initialEndpoint?: string }) 
   const [live, setLive] = useState(true);
   const [selected, setSelected] = useState<string | null>(null);
   const [clear, setClear] = useState(false);
+  const toast = useToast();
   const query = useRef<LogQuery>({});
 
   const load = useCallback(async () => {
@@ -173,14 +174,45 @@ export default function Logs({ initialEndpoint }: { initialEndpoint?: string }) 
       </div>
       {selected && <LogDrawer id={selected} onClose={() => setSelected(null)} />}
       {clear && (
-        <Confirm
-          title="清空所有日志？"
-          message="请求记录和用量统计都会被删除，不能恢复。"
-          danger
-          confirmText="清空"
+        <Modal
+          title="清空请求日志"
+          icon={<Trash2 size={18} />}
           onClose={() => setClear(false)}
-          onConfirm={() => api.clearLogs().then(load)}
-        />
+          footer={
+            <>
+              <button className="btn btn-ghost" onClick={() => setClear(false)}>
+                取消
+              </button>
+              <button
+                className="btn btn-danger"
+                onClick={() => {
+                  setClear(false);
+                  api.clearLogs().then(load);
+                }}
+              >
+                清空全部
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  setClear(false);
+                  api.clearFailedLogs().then((n) => {
+                    toast(n ? `已删除 ${n} 条失败的请求` : "没有失败的请求");
+                    load();
+                  });
+                }}
+              >
+                只清空失败的
+              </button>
+            </>
+          }
+        >
+          <p style={{ margin: 0 }}>
+            「只清空失败的」会删除状态码不是 2xx、或者带错误信息的请求，成功的请求和用量统计都保留。
+            <br />
+            「清空全部」会删除所有请求记录和用量统计，不能恢复。
+          </p>
+        </Modal>
       )}
     </div>
   );

@@ -266,6 +266,12 @@ async fn get_log(state: State<'_, AppState>, id: String) -> CmdResult<Option<Log
 }
 
 #[tauri::command]
+async fn clear_failed_logs(state: State<'_, AppState>) -> CmdResult<usize> {
+    let g = state.gateway.clone();
+    tokio::task::spawn_blocking(move || g.store().clear_failed()).await.map_err(err)?.map_err(err)
+}
+
+#[tauri::command]
 async fn clear_logs(state: State<'_, AppState>) -> CmdResult<()> {
     let g = state.gateway.clone();
     tokio::task::spawn_blocking(move || g.store().clear()).await.map_err(err)?.map_err(err)
@@ -494,6 +500,7 @@ pub fn run() {
             list_logs,
             get_log,
             clear_logs,
+            clear_failed_logs,
             get_stats,
             list_clients,
             apply_client,

@@ -104,7 +104,7 @@ export interface RuleConfig {
 
 export interface Config {
   server: { port: number; accessKey: string };
-  routing: { defaultModel: string; claudeAlias: boolean };
+  routing: { defaultModel: string; claudeAlias: boolean; modelOrder: string[] };
   failover: { onConnectError: boolean; onTimeout: boolean; on5xx: boolean; on429: boolean; extraStatus: number[] };
   logging: { bodyRetentionHours: number; statsRetentionDays: number; maxBodyKb: number };
   ui: { theme: "auto" | "light" | "dark"; probeUrl: string };
@@ -278,6 +278,8 @@ export interface ApplyOptions {
   smallModel: string;
   discovery: boolean;
   maxContextTokens: number;
+  /** 所有 subagent 固定用的模型，留空由 Claude Code 决定 */
+  subagentModel: string;
 }
 
 export interface ListedModel {
@@ -377,6 +379,8 @@ export const api = {
   listLogs: (query: LogQuery) => invoke<LogRecord[]>("list_logs", { query }),
   getLog: (id: string) => invoke<{ record: LogRecord; bodies: LogBodies | null } | null>("get_log", { id }),
   clearLogs: () => invoke<void>("clear_logs"),
+  /** 只清空失败的请求，返回删除条数 */
+  clearFailedLogs: () => invoke<number>("clear_failed_logs"),
   getStats: (days: number) => invoke<Stats>("get_stats", { days, tzOffsetMin: -new Date().getTimezoneOffset() }),
 
   listClients: () => invoke<ClientInfo[]>("list_clients"),

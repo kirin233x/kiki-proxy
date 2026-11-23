@@ -5,7 +5,8 @@
   },
   "routing": {
     "defaultModel": "internal/sonnet",
-    "claudeAlias": true
+    "claudeAlias": true,
+    "modelOrder": []
   },
   "failover": {
     "onConnectError": true,

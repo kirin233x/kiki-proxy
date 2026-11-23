@@ -62,6 +62,70 @@ fn parse_blocks(content: &Value) -> Vec<Part> {
     out
 }
 
+/// Claude Code 新版会在 messages 里插入 `role: "system"` 的消息（插件提示、子任务通知等），
+/// subagent 的请求经常以这样一条消息结尾。官方 API 认识它，但大多数兼容服务（以及转 OpenAI 格式的程序）
+/// 不认识，常被当成助手消息，模型以为已经答完了，subagent 就直接结束。
+/// 这里把它们并进相邻的用户消息（包在 <system-reminder> 里），保证对话仍以用户消息结尾。返回是否改动过
+pub fn fold_system_messages(messages: &mut Vec<Value>) -> bool {
+    if !messages.iter().any(|m| m.get("role").and_then(Value::as_str) == Some("system")) {
+        return false;
+    }
+    let blocks_of = |m: &Value| -> Vec<Value> {
+        match m.get("content") {
+            Some(Value::String(s)) => vec![json!({"type":"text","text":s})],
+            Some(Value::Array(a)) => a.clone(),
+            _ => vec![],
+        }
+    };
+    let mut out: Vec<Value> = Vec::with_capacity(messages.len());
+    let mut pending: Vec<Value> = Vec::new();
+    for m in messages.drain(..) {
+        let role = m.get("role").and_then(Value::as_str).unwrap_or("user").to_string();
+        if role == "system" {
+            let text: Vec<String> = blocks_of(&m).iter().filter_map(|b| b.get("text").and_then(Value::as_str).map(String::from)).collect();
+            let text = text.join("\n\n");
+            if text.trim().is_empty() {
+                continue;
+            }
+            let block = json!({"type":"text","text":format!("<system-reminder>\n{text}\n</system-reminder>")});
+            // 前一条是用户消息就接在它后面
+            match out.last_mut() {
+                Some(prev) if prev.get("role").and_then(Value::as_str) == Some("user") => {
+                    let mut b = blocks_of(prev);
+                    b.push(block);
+                    prev["content"] = json!(b);
+                }
+                _ => pending.push(block),
+            }
+            continue;
+        }
+        if !pending.is_empty() {
+            if role == "user" {
+                // 并进下一条用户消息；tool_result 必须排在最前面，所以放到末尾
+                let mut b = blocks_of(&m);
+                let has_result = b.iter().any(|x| x.get("type").and_then(Value::as_str) == Some("tool_result"));
+                let mut m = m;
+                if has_result {
+                    b.append(&mut pending);
+                } else {
+                    pending.append(&mut b);
+                    b = std::mem::take(&mut pending);
+                }
+                m["content"] = json!(b);
+                out.push(m);
+                continue;
+            }
+            out.push(json!({"role":"user","content": std::mem::take(&mut pending)}));
+        }
+        out.push(m);
+    }
+    if !pending.is_empty() {
+        out.push(json!({"role":"user","content": pending}));
+    }
+    *messages = out;
+    true
+}
+
 pub fn parse_request(body: &Value) -> Result<Request> {
     let model = opt_str(body, "model").ok_or_else(|| anyhow!("请求缺少 model 字段"))?;
     let system = match body.get("system") {
@@ -72,8 +136,10 @@ pub fn parse_request(body: &Value) -> Result<Request> {
         }
         _ => None,
     };
+    let mut raw = body.get("messages").and_then(Value::as_array).cloned().unwrap_or_default();
+    fold_system_messages(&mut raw);
     let mut messages = Vec::new();
-    for m in body.get("messages").and_then(Value::as_array).into_iter().flatten() {
+    for m in &raw {
         let role = if m.get("role").and_then(Value::as_str) == Some("assistant") { Role::Assistant } else { Role::User };
         messages.push(Message { role, content: m.get("content").map(parse_blocks).unwrap_or_default() });
     }
@@ -475,5 +541,46 @@ impl Encoder {
             Some(i) => vec![Self::ev("content_block_delta", json!({"type":"content_block_delta","index":i,"delta":delta}))],
             None => vec![],
         }
+    }
+}
+
+#[cfg(test)]
+mod fold_tests {
+    use super::fold_system_messages;
+    use serde_json::json;
+
+    /// Claude Code subagent 的真实请求结构：user, system, assistant(tool_use), user(tool_result), system
+    #[test]
+    fn system_messages_fold_into_user() {
+        let mut m = vec![
+            json!({"role":"user","content":[{"type":"text","text":"任务"}]}),
+            json!({"role":"system","content":"插件提示"}),
+            json!({"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}]}),
+            json!({"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}),
+            json!({"role":"system","content":[{"type":"text","text":"后台通知"}]}),
+        ];
+        assert!(fold_system_messages(&mut m));
+        let roles: Vec<&str> = m.iter().map(|x| x["role"].as_str().unwrap()).collect();
+        assert_eq!(roles, ["user", "assistant", "user"]);
+        assert_eq!(m[0]["content"][1]["text"], json!("<system-reminder>\n插件提示\n</system-reminder>"));
+        assert_eq!(m[2]["content"][0]["type"], json!("tool_result"));
+        assert_eq!(m[2]["content"][1]["text"], json!("<system-reminder>\n后台通知\n</system-reminder>"));
+
+        // 开头就是 system、后面跟 tool_result 以外的用户消息：并到用户消息前面
+        let mut m = vec![json!({"role":"system","content":"a"}), json!({"role":"user","content":"b"})];
+        fold_system_messages(&mut m);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0]["content"][1]["text"], json!("b"));
+        // 夹在两条助手消息之间：变成一条用户消息
+        let mut m = vec![
+            json!({"role":"user","content":"q"}),
+            json!({"role":"assistant","content":"x"}),
+            json!({"role":"system","content":"s"}),
+        ];
+        fold_system_messages(&mut m);
+        assert_eq!(m.last().unwrap()["role"], json!("user"));
+        // 没有 system 消息时不动
+        let mut m = vec![json!({"role":"user","content":"q"})];
+        assert!(!fold_system_messages(&mut m));
     }
 }

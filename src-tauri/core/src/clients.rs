@@ -35,6 +35,8 @@ pub struct ApplyOptions {
     pub discovery: bool,
     /// Claude Code：CLAUDE_CODE_MAX_CONTEXT_TOKENS，不带 [1m] 的模型按这个窗口压缩上下文；0 表示不设置
     pub max_context_tokens: u32,
+    /// Claude Code：所有 subagent 固定用这个模型（CLAUDE_CODE_SUBAGENT_MODEL）；留空由 Claude Code 决定
+    pub subagent_model: String,
 }
 
 fn home() -> Result<PathBuf> {
@@ -330,7 +332,12 @@ fn apply_claude(port: u16, key: &str, cfg: &crate::config::Config, opts: &ApplyO
         ch.remove(env, e, &format!("ANTHROPIC_DEFAULT_FABLE_MODEL{suffix}"), "旧服务的模型设置");
     }
     ch.remove(env, e, "ANTHROPIC_SMALL_FAST_MODEL", "旧版设置，已由 Haiku 档代替");
-    ch.remove(env, e, "CLAUDE_CODE_SUBAGENT_MODEL", "会让子代理固定用这个模型");
+    if opts.subagent_model.is_empty() {
+        ch.remove(env, e, "CLAUDE_CODE_SUBAGENT_MODEL", "没有指定 subagent 模型，由 Claude Code 决定");
+    } else {
+        let m = meta(cfg, &opts.subagent_model);
+        ch.set(env, e, "CLAUDE_CODE_SUBAGENT_MODEL", json!(if m.is_1m { format!("{}[1m]", m.id) } else { m.id }));
+    }
     for k in ["ANTHROPIC_CUSTOM_MODEL_OPTION", "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME", "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION"] {
         ch.remove(env, e, k, "模型列表改由网关提供");
     }

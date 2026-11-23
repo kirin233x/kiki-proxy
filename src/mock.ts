@@ -20,7 +20,7 @@ function emit(event: string, payload: unknown) {
 
 let config: Config = {
   server: { port: 41521, accessKey: "" },
-  routing: { defaultModel: "internal/sonnet", claudeAlias: true },
+  routing: { defaultModel: "internal/sonnet", claudeAlias: true, modelOrder: [] },
   failover: { onConnectError: true, onTimeout: true, on5xx: true, on429: true, extraStatus: [] },
   logging: { bodyRetentionHours: 24, statsRetentionDays: 90, maxBodyKb: 8192 },
   ui: { theme: "auto", probeUrl: "https://www.gstatic.com/generate_204" },
@@ -240,14 +240,20 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
       return r(config);
     case "reveal_config":
       return r(null);
-    case "list_models":
+    case "list_models": {
+      const order = config.routing.modelOrder ?? [];
+      const pos = (id: string) => (order.includes(id) ? order.indexOf(id) : 1e9);
       return r(
         config.endpoints
           .filter((e) => e.enabled)
           .flatMap((e) =>
             e.models.map((m) => ({ id: `${e.id}/${m.name}`, displayName: m.displayName || `${e.id}/${m.name}`, endpoint: e.name, vision: m.vision, contextWindow: m.contextWindow })),
-          ),
+          )
+          .map((m, i) => ({ m, i }))
+          .sort((a, b) => pos(a.m.id) - pos(b.m.id) || a.i - b.i)
+          .map((x) => x.m),
       );
+    }
     case "explain_route": {
       const name = String(args.model).replace(/^claude@/, "");
       const rule = config.rules.find((x) => x.enabled && new RegExp("^" + x.pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i").test(name));
@@ -432,6 +438,13 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
     case "clear_logs":
       logs.length = 0;
       return r(null);
+    case "clear_failed_logs": {
+      const before = logs.length;
+      const keep = logs.filter((l) => l.status >= 200 && l.status < 300 && !l.error);
+      logs.length = 0;
+      logs.push(...keep);
+      return r(before - keep.length);
+    }
     case "get_stats":
       return r(stats(args.days));
     case "list_clients":

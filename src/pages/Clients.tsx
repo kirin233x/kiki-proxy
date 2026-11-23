@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useState } from "react";
-import { Check, Download, FileJson, RotateCcw } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Download, FileJson, Plus, RotateCcw, X } from "lucide-react";
 import { api, ApplyOptions, ApplyReport, ClaudeInspection, ClientInfo, DesktopRoute, fmtContext } from "../api";
 import { useApp } from "../App";
 import ModelInput from "../components/ModelInput";
@@ -13,10 +13,27 @@ export default function Clients() {
   const [clients, setClients] = useState<ClientInfo[]>([]);
   const [opts, setOpts] = useState<Record<string, ApplyOptions>>({});
   const [report, setReport] = useState<(ApplyReport & { name: string }) | null>(null);
+  const [tab, setTab] = useState<TabId>(() => {
+    try {
+      return (localStorage.getItem("kiki.clientTab") as TabId) || "claude";
+    } catch {
+      return "claude";
+    }
+  });
+  const [deskOn, setDeskOn] = useState(false);
   const refresh = () => api.listClients().then(setClients);
   useEffect(() => {
     refresh();
+    api.desktopConnected().then(setDeskOn);
   }, []);
+  const pick = (t: TabId) => {
+    setTab(t);
+    try {
+      localStorage.setItem("kiki.clientTab", t);
+    } catch {
+      /* 存不了就算了 */
+    }
+  };
 
   // Claude Code 对不认识的模型名默认按 1M 上下文；不带 [1m] 的模型按这个值压缩上下文。建议取非 1M 模型里最小的窗口
   const smallWindows = models.map((m) => m.contextWindow).filter((c) => c > 0 && c < 1_000_000);
@@ -31,6 +48,7 @@ export default function Clients() {
         smallModel: "",
         discovery: true,
         maxContextTokens: c?.maxContextTokens || (id === "claude" ? suggestedCtx : 0),
+        subagentModel: "",
       }
     );
   };
@@ -60,6 +78,15 @@ export default function Clients() {
   const claude = client("claude");
   const codex = client("codex");
   const gemini = client("gemini");
+  const isOn = (t: TabId) => (t === "desktop" ? deskOn : t === "other" ? false : !!client(t)?.connected);
+
+  // 调整模型列表顺序：立即保存，网关的 /v1/models 按这个顺序返回
+  const moveModel = (from: number, to: number) => {
+    const ids = models.map((m) => m.id);
+    const [x] = ids.splice(from, 1);
+    ids.splice(to, 0, x);
+    saveConfig({ ...config, routing: { ...config.routing, modelOrder: ids } }).catch(() => {});
+  };
 
   return (
     <div className="page">
@@ -85,98 +112,175 @@ export default function Clients() {
           </div>
         </div>
 
+        <div className="client-tabs">
+          {TABS.map((t) => (
+            <button key={t.id} className={tab === t.id ? "on" : ""} onClick={() => pick(t.id)}>
+              <span className="client-tab-glyph" style={{ background: t.color }}>
+                {t.glyph}
+              </span>
+              {t.name}
+              {isOn(t.id) && <i className="sdot ok" title="已接入" />}
+            </button>
+          ))}
+        </div>
+
         {/* ---------------------------------------------------------------- Claude Code */}
-        {claude && (
-          <ClientCard
-            glyph="C"
-            color="#d97757"
-            title="Claude Code"
-            sub="命令行版 · 写入 ~/.claude/settings.json"
-            info={claude}
-            onApply={() => apply(claude)}
-            onRestore={() => restore(claude)}
-          >
-            <div className="cc-grid">
-              <Row label="默认模型" help="留空则用 Claude Code 自己的默认模型（按路由规则或兜底模型转发）">
-                <ModelInput value={o("claude").model} onChange={(v) => setO("claude", { model: v })} placeholder="例如 internal/sonnet" />
-              </Row>
-              <Row label="/model 里的三档" help="Claude Code 的 Opus、Sonnet、Haiku 实际用哪个模型。留空就跟默认模型一致；Haiku 也用于生成标题、摘要等后台小任务">
-                <div className="tier-grid">
-                  {(
-                    [
-                      ["opusModel", "Opus"],
-                      ["sonnetModel", "Sonnet"],
-                      ["smallModel", "Haiku"],
-                    ] as const
-                  ).map(([k, label]) => (
-                    <label key={k}>
-                      <span>{label}</span>
-                      <ModelInput value={o("claude")[k]} onChange={(v) => setO("claude", { [k]: v })} placeholder={o("claude").model || "跟默认模型一致"} />
-                    </label>
-                  ))}
-                </div>
-              </Row>
-              <Row
-                label="非 1M 模型的上下文窗口"
-                help={
-                  <>
-                    Claude Code 默认把网关里的模型当成 1M 上下文；设置后，不带 [1m] 的模型会按这个大小压缩上下文。
-                    {suggestedCtx > 0 && ` 建议 ${fmtContext(suggestedCtx)}（已启用模型里最小的窗口）`}
-                  </>
-                }
-              >
-                <select className="select" value={o("claude").maxContextTokens} onChange={(e) => setO("claude", { maxContextTokens: Number(e.target.value) })}>
-                  <option value={0}>不设置</option>
-                  {[...new Set([...CTX_OPTIONS, ...(suggestedCtx ? [suggestedCtx] : []), ...(o("claude").maxContextTokens ? [o("claude").maxContextTokens] : [])])]
-                    .sort((a, b) => a - b)
-                    .map((v) => (
-                      <option key={v} value={v}>
-                        {fmtContext(v)}
-                        {v === suggestedCtx ? "（建议）" : ""}
-                      </option>
+        {tab === "claude" && claude && (
+          <>
+            <ClientCard
+              glyph="C"
+              color="#d97757"
+              title="Claude Code"
+              sub="命令行版 · 写入 ~/.claude/settings.json"
+              info={claude}
+              onApply={() => apply(claude)}
+              onRestore={() => restore(claude)}
+            >
+              <div className="cc-grid">
+                <Row label="默认模型" help="留空则用 Claude Code 自己的默认模型（按路由规则或兜底模型转发）">
+                  <ModelInput value={o("claude").model} onChange={(v) => setO("claude", { model: v })} placeholder="例如 internal/sonnet" />
+                </Row>
+                <Row label="/model 里的三档" help="Claude Code 的 Opus、Sonnet、Haiku 实际用哪个模型。留空就跟默认模型一致；Haiku 也用于生成标题、摘要等后台小任务">
+                  <div className="tier-grid">
+                    {(
+                      [
+                        ["opusModel", "Opus"],
+                        ["sonnetModel", "Sonnet"],
+                        ["smallModel", "Haiku"],
+                      ] as const
+                    ).map(([k, label]) => (
+                      <label key={k}>
+                        <span>{label}</span>
+                        <ModelInput value={o("claude")[k]} onChange={(v) => setO("claude", { [k]: v })} placeholder={o("claude").model || "跟默认模型一致"} />
+                      </label>
                     ))}
-                </select>
+                  </div>
+                </Row>
+                <Row
+                  label="Subagent 模型"
+                  help="所有 subagent 固定用这个模型（写入 CLAUDE_CODE_SUBAGENT_MODEL）。留空由 Claude Code 决定：一般跟随当前模型，Explore 等内置 agent 用 Haiku 档"
+                >
+                  <ModelInput value={o("claude").subagentModel} onChange={(v) => setO("claude", { subagentModel: v })} placeholder="留空：由 Claude Code 决定" />
+                </Row>
+                <Row
+                  label="非 1M 模型的上下文窗口"
+                  help={
+                    <>
+                      Claude Code 默认把网关里的模型当成 1M 上下文；设置后，不带 [1m] 的模型会按这个大小压缩上下文。
+                      {suggestedCtx > 0 && ` 建议 ${fmtContext(suggestedCtx)}（已启用模型里最小的窗口）`}
+                    </>
+                  }
+                >
+                  <select className="select" value={o("claude").maxContextTokens} onChange={(e) => setO("claude", { maxContextTokens: Number(e.target.value) })}>
+                    <option value={0}>不设置</option>
+                    {[...new Set([...CTX_OPTIONS, ...(suggestedCtx ? [suggestedCtx] : []), ...(o("claude").maxContextTokens ? [o("claude").maxContextTokens] : [])])]
+                      .sort((a, b) => a - b)
+                      .map((v) => (
+                        <option key={v} value={v}>
+                          {fmtContext(v)}
+                          {v === suggestedCtx ? "（建议）" : ""}
+                        </option>
+                      ))}
+                  </select>
+                </Row>
+              </div>
+              <ClaudeCheck refreshKey={report} />
+              <div className="cc-switches">
+                <SwitchRow
+                  on={o("claude").discovery}
+                  onChange={(v) => setO("claude", { discovery: v })}
+                  title="/model 里列出网关的所有模型"
+                  desc="写入 CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1"
+                />
+                <SwitchRow
+                  on={config.routing.claudeAlias}
+                  onChange={(v) => saveConfig({ ...config, routing: { ...config.routing, claudeAlias: v } }).catch(() => {})}
+                  title="列表里也显示非 Claude 模型"
+                  desc="名字不含 claude 的模型显示为 claude@前缀/模型，立即生效"
+                />
+              </div>
+            </ClientCard>
+
+            <div className="panel cc-card">
+              <div className="cc-head">
+                <div className="cc-title">
+                  <b>/model 列表顺序</b>
+                  <span>网关返回模型列表的顺序。Claude Code 的 /model、桌面版的模型发现、本应用里的模型选择都按这个顺序；调整后立即保存，重启 Claude Code 生效</span>
+                </div>
+              </div>
+              <div className="cc-body">
+                <OrderList
+                  items={models}
+                  keyOf={(m) => m.id}
+                  onMove={moveModel}
+                  render={(m) => (
+                    <>
+                      <code>{m.id}</code>
+                      {m.displayName !== m.id && <span className="order-sub">{m.displayName}</span>}
+                      {m.contextWindow >= 1_000_000 && <span className="tag accent">1M</span>}
+                    </>
+                  )}
+                />
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ---------------------------------------------------------------- Claude 桌面版 */}
+        {tab === "desktop" && <DesktopCard baseUrl={baseUrl} apiKey={key} connected={deskOn} onConnected={setDeskOn} />}
+
+        {/* ---------------------------------------------------------------- Codex / Gemini */}
+        {tab === "codex" && codex && (
+          <ClientCard glyph="X" color="#10a37f" title="Codex CLI" sub="写入 ~/.codex/config.toml" info={codex} onApply={() => apply(codex)} onRestore={() => restore(codex)}>
+            <div className="cc-grid">
+              <Row label="默认模型" help={config.server.accessKey ? `设置了访问密钥：请在 shell 里 export KIKI_PROXY_KEY=${config.server.accessKey}` : "Codex 默认使用的模型，可以在 Codex 里用 /model 切换"}>
+                <ModelInput value={o("codex").model} onChange={(v) => setO("codex", { model: v })} placeholder="例如 internal/sonnet" />
               </Row>
             </div>
-            <ClaudeCheck refreshKey={report} />
-            <div className="cc-switches">
-              <SwitchRow
-                on={o("claude").discovery}
-                onChange={(v) => setO("claude", { discovery: v })}
-                title="/model 里列出网关的所有模型"
-                desc="写入 CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1"
-              />
-              <SwitchRow
-                on={config.routing.claudeAlias}
-                onChange={(v) => saveConfig({ ...config, routing: { ...config.routing, claudeAlias: v } }).catch(() => {})}
-                title="列表里也显示非 Claude 模型"
-                desc="名字不含 claude 的模型显示为 claude@前缀/模型，立即生效"
-              />
+          </ClientCard>
+        )}
+        {tab === "gemini" && gemini && (
+          <ClientCard glyph="G" color="#4f7cff" title="Gemini CLI" sub="写入 ~/.gemini/.env" info={gemini} onApply={() => apply(gemini)} onRestore={() => restore(gemini)}>
+            <div className="cc-grid">
+              <Row label="默认模型" help="Gemini CLI 默认使用的模型">
+                <ModelInput value={o("gemini").model} onChange={(v) => setO("gemini", { model: v })} placeholder="例如 gm/gemini-2.5-pro" />
+              </Row>
             </div>
           </ClientCard>
         )}
 
-        {/* ---------------------------------------------------------------- Claude 桌面版 */}
-        <DesktopCard baseUrl={baseUrl} apiKey={key} />
-
-        {/* ---------------------------------------------------------------- Codex / Gemini */}
-        <div className="cc-pair">
-          {codex && (
-            <ClientCard glyph="X" color="#10a37f" title="Codex CLI" sub="写入 ~/.codex/config.toml" info={codex} onApply={() => apply(codex)} onRestore={() => restore(codex)} compact>
-              <Row label="默认模型">
-                <ModelInput value={o("codex").model} onChange={(v) => setO("codex", { model: v })} placeholder="例如 internal/sonnet" />
-              </Row>
-              {config.server.accessKey && <p className="muted-sm">设置了访问密钥：请在 shell 里 export KIKI_PROXY_KEY={config.server.accessKey}</p>}
-            </ClientCard>
-          )}
-          {gemini && (
-            <ClientCard glyph="G" color="#4f7cff" title="Gemini CLI" sub="写入 ~/.gemini/.env" info={gemini} onApply={() => apply(gemini)} onRestore={() => restore(gemini)} compact>
-              <Row label="默认模型">
-                <ModelInput value={o("gemini").model} onChange={(v) => setO("gemini", { model: v })} placeholder="例如 gm/gemini-2.5-pro" />
-              </Row>
-            </ClientCard>
-          )}
-        </div>
+        {/* ---------------------------------------------------------------- 其他 */}
+        {tab === "other" && (
+          <div className="panel cc-card">
+            <div className="cc-head">
+              <span className="cc-glyph" style={{ background: "#646a80" }}>
+                …
+              </span>
+              <div className="cc-title">
+                <b>其他工具</b>
+                <span>Cursor、Cherry Studio、dsh 等，按工具支持的格式填下面的地址；模型名写「端点前缀/模型名」</span>
+              </div>
+            </div>
+            <table className="other-table">
+              <tbody>
+                {[
+                  ["Anthropic 格式", baseUrl, "/v1/messages"],
+                  ["OpenAI 格式", `${baseUrl}/v1`, "/chat/completions、/responses"],
+                  ["Gemini 格式", baseUrl, "/v1beta/models/{模型}:generateContent"],
+                ].map(([name, url, path]) => (
+                  <tr key={name}>
+                    <td>{name}</td>
+                    <td>
+                      <code>{url}</code>
+                      <CopyButton text={url} small />
+                    </td>
+                    <td className="muted-sm">{path}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         {report && (
           <Modal
@@ -206,36 +310,48 @@ export default function Clients() {
             )}
           </Modal>
         )}
-
-        {/* ---------------------------------------------------------------- 其他 */}
-        <div className="panel cc-card">
-          <div className="cc-head">
-            <span className="cc-glyph" style={{ background: "#646a80" }}>…</span>
-            <div className="cc-title">
-              <b>其他工具</b>
-              <span>Cursor、Cherry Studio、dsh 等，按工具支持的格式填下面的地址；模型名写「端点前缀/模型名」</span>
-            </div>
-          </div>
-          <table className="other-table">
-            <tbody>
-              {[
-                ["Anthropic 格式", baseUrl, "/v1/messages"],
-                ["OpenAI 格式", `${baseUrl}/v1`, "/chat/completions、/responses"],
-                ["Gemini 格式", baseUrl, "/v1beta/models/{模型}:generateContent"],
-              ].map(([name, url, path]) => (
-                <tr key={name}>
-                  <td>{name}</td>
-                  <td>
-                    <code>{url}</code>
-                    <CopyButton text={url} small />
-                  </td>
-                  <td className="muted-sm">{path}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
       </div>
+    </div>
+  );
+}
+
+type TabId = "claude" | "desktop" | "codex" | "gemini" | "other";
+const TABS: { id: TabId; name: string; glyph: string; color: string }[] = [
+  { id: "claude", name: "Claude Code", glyph: "C", color: "#d97757" },
+  { id: "desktop", name: "Claude 桌面版", glyph: "D", color: "#1b1f2e" },
+  { id: "codex", name: "Codex CLI", glyph: "X", color: "#10a37f" },
+  { id: "gemini", name: "Gemini CLI", glyph: "G", color: "#4f7cff" },
+  { id: "other", name: "其他工具", glyph: "…", color: "#646a80" },
+];
+
+/** 可以上下调整顺序的列表 */
+function OrderList<T>(props: {
+  items: T[];
+  keyOf: (t: T) => string;
+  render: (t: T, i: number) => ReactNode;
+  onMove: (from: number, to: number) => void;
+  extra?: (t: T, i: number) => ReactNode;
+  empty?: ReactNode;
+}) {
+  const n = props.items.length;
+  if (!n) return <div className="order-empty">{props.empty ?? "没有模型"}</div>;
+  return (
+    <div className="order-list">
+      {props.items.map((t, i) => (
+        <div key={props.keyOf(t)} className="order-row">
+          <span className="order-num">{i + 1}</span>
+          <div className="order-main">{props.render(t, i)}</div>
+          {props.extra?.(t, i)}
+          <div className="order-btns">
+            <button className="icon-btn" title="上移" disabled={i === 0} onClick={() => props.onMove(i, i - 1)}>
+              <ArrowUp size={14} />
+            </button>
+            <button className="icon-btn" title="下移" disabled={i === n - 1} onClick={() => props.onMove(i, i + 1)}>
+              <ArrowDown size={14} />
+            </button>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -250,6 +366,8 @@ function ClientCard(props: {
   onApply?: () => void;
   onRestore?: () => void;
   applyText?: string;
+  canRestore?: boolean;
+  busy?: boolean;
   compact?: boolean;
   children: ReactNode;
 }) {
@@ -268,14 +386,14 @@ function ClientCard(props: {
           <span>{props.sub}</span>
         </div>
         <div className="cc-actions">
-          {props.info?.hasBackup && props.onRestore && (
-            <button className="btn btn-sm btn-ghost" onClick={props.onRestore} title="恢复成接入前的配置文件">
+          {(props.canRestore ?? props.info?.hasBackup) && props.onRestore && (
+            <button className="btn btn-sm btn-ghost" onClick={props.onRestore} disabled={props.busy} title="恢复成接入前的配置">
               <RotateCcw size={14} />
               恢复
             </button>
           )}
           {props.onApply && (
-            <button className="btn btn-sm btn-primary" onClick={props.onApply}>
+            <button className="btn btn-sm btn-primary" onClick={props.onApply} disabled={props.busy}>
               {props.applyText ?? (connected ? "更新配置" : "一键接入")}
             </button>
           )}
@@ -311,17 +429,15 @@ function SwitchRow(props: { on: boolean; onChange: (v: boolean) => void; title: 
 }
 
 /** Claude Code 桌面版：桌面版只接受 claude-sonnet-* 这类名字，给每个模型分配一个「档位名」，请求到网关再换回真实模型 */
-function DesktopCard(props: { baseUrl: string; apiKey: string }) {
+function DesktopCard(props: { baseUrl: string; apiKey: string; connected: boolean; onConnected: (v: boolean) => void }) {
   const { models, config, saveConfig } = useApp();
   const toast = useToast();
-  const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [file, setFile] = useState("");
   const saved = config?.desktop?.routes ?? [];
-  // 每个选中的模型 → 档位；顺序即菜单顺序，第一个是默认模型
+  // 选中的模型和档位；顺序就是桌面版菜单的顺序，第一个是默认模型
   const [rows, setRows] = useState<{ model: string; role: Role }[]>([]);
   const [inited, setInited] = useState(false);
-  // 模型列表加载完再初始化：有保存过的路由就用它，否则默认勾前几个
   useEffect(() => {
     if (inited || !models.length) return;
     setRows(
@@ -331,14 +447,16 @@ function DesktopCard(props: { baseUrl: string; apiKey: string }) {
     );
     setInited(true);
   }, [models, saved, inited]);
-  useEffect(() => {
-    api.desktopConnected().then(setConnected);
-  }, []);
-  const on = (id: string) => rows.some((r) => r.model === id);
-  const toggle = (id: string) =>
-    setRows(on(id) ? rows.filter((r) => r.model !== id) : [...rows, { model: id, role: guessRole(id) }]);
   const routes = buildRoutes(rows, models);
-  const idOf = (id: string) => routes.find((r) => r.model === id)?.id ?? "";
+  const dirty = JSON.stringify(routes) !== JSON.stringify(saved);
+  const rest = models.filter((m) => !rows.some((r) => r.model === m.id));
+
+  const move = (from: number, to: number) => {
+    const next = [...rows];
+    const [x] = next.splice(from, 1);
+    next.splice(to, 0, x);
+    setRows(next);
+  };
 
   const run = async (kind: "apply" | "export" | "restore") => {
     if (!config) return;
@@ -352,13 +470,13 @@ function DesktopCard(props: { baseUrl: string; apiKey: string }) {
         await saveConfig({ ...config, desktop: { routes } });
         if (kind === "apply") {
           await api.applyDesktopConfig();
-          toast("已写入桌面版，完全退出桌面版再打开即可");
+          toast("已写入桌面版，完全退出桌面版（⌘Q）再打开即可");
         } else {
           setFile(await api.exportDesktopConfig());
           toast("配置文件已生成");
         }
       }
-      setConnected(await api.desktopConnected());
+      props.onConnected(await api.desktopConnected());
     } catch (e) {
       toast(String(e), true);
     } finally {
@@ -367,72 +485,90 @@ function DesktopCard(props: { baseUrl: string; apiKey: string }) {
   };
 
   return (
-    <ClientCard glyph="D" color="#1b1f2e" title="Claude Code 桌面版" sub="桌面版不读 settings.json，用它自己的「第三方推理」配置" connected={connected}>
-      <div className="desk">
-        <div className="desk-models">
-          <div className="desk-label">
-            放进桌面版的模型
-            <span>第一个是默认模型</span>
-          </div>
-          <div className="desk-list">
-            {models.map((m) => {
-              const checked = on(m.id);
-              const row = rows.find((r) => r.model === m.id);
+    <ClientCard
+      glyph="D"
+      color="#1b1f2e"
+      title="Claude Code 桌面版"
+      sub="写入桌面版的「第三方推理」配置库，完全退出桌面版再打开生效"
+      connected={props.connected}
+      canRestore={props.connected}
+      busy={busy || !routes.length}
+      applyText={props.connected ? (dirty ? "更新配置" : "重新写入") : "一键接入"}
+      onApply={() => run("apply")}
+      onRestore={() => run("restore")}
+    >
+      <div className="cc-grid">
+        <Row
+          label="桌面版模型菜单"
+          help={
+            <>
+              第一个是默认模型。档位决定桌面版按哪种 Claude 模型组织请求（如思考强度），实际请求发给左边的模型；某个模型报参数错误时可以换成 Haiku 档试试。
+              {dirty && props.connected && <b className="desk-dirty"> 有改动还没写入桌面版</b>}
+            </>
+          }
+        >
+          <OrderList
+            items={rows}
+            keyOf={(r) => r.model}
+            onMove={move}
+            empty="还没有选择模型"
+            render={(r, i) => {
+              const route = routes.find((x) => x.model === r.model);
+              const m = models.find((x) => x.id === r.model);
               return (
-                <label key={m.id} className={checked ? "on" : ""}>
-                  <input type="checkbox" checked={checked} onChange={() => toggle(m.id)} />
-                  <code>{m.id}</code>
-                  {m.contextWindow >= 1_000_000 && <span className="tag accent">1M</span>}
-                  {checked && row && (
-                    <>
-                      <select
-                        className="desk-behaves"
-                        title={`桌面版里显示为 ${idOf(m.id)}，按这个档位处理思考强度等参数；实际请求发给 ${m.id}`}
-                        value={row.role}
-                        onClick={(e) => e.preventDefault()}
-                        onChange={(e) => setRows(rows.map((r) => (r.model === m.id ? { ...r, role: e.target.value as Role } : r)))}
-                      >
-                        {ROLES.map((r) => (
-                          <option key={r} value={r}>
-                            {ROLE_NAME[r]} 档
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        className={`desk-def ${rows[0]?.model === m.id ? "is" : ""}`}
-                        onClick={(e) => (e.preventDefault(), setRows([row, ...rows.filter((r) => r.model !== m.id)]))}
-                      >
-                        {rows[0]?.model === m.id ? "默认" : "设为默认"}
-                      </button>
-                    </>
-                  )}
-                </label>
+                <>
+                  <code>{r.model}</code>
+                  {i === 0 && <span className="tag accent">默认</span>}
+                  {m && m.contextWindow >= 1_000_000 && <span className="tag">1M</span>}
+                  {route && <span className="order-sub" title="桌面版看到的模型名">{route.id}</span>}
+                </>
               );
-            })}
-          </div>
-          <p className="muted-sm desk-note">
-            桌面版只接受 claude-sonnet-*、claude-opus-* 这类模型名，名单里有一个不合格就整个报「Invalid: Model list」。
-            所以 kiki-proxy 给每个模型分配一个这样的名字（同档多个时加 -r2、-r3），菜单里显示的仍是真实模型名，请求到了网关再换回来。
-          </p>
-        </div>
-
-        <div className="desk-steps">
-          <div className="desk-label">接入步骤</div>
-          <ol>
+            }}
+            extra={(r) => (
+              <>
+                <select
+                  className="select select-sm"
+                  value={r.role}
+                  title="桌面版按哪个档位处理这个模型"
+                  onChange={(e) => setRows(rows.map((x) => (x.model === r.model ? { ...x, role: e.target.value as Role } : x)))}
+                >
+                  {ROLES.map((x) => (
+                    <option key={x} value={x}>
+                      {ROLE_NAME[x]} 档
+                    </option>
+                  ))}
+                </select>
+                <button className="icon-btn" title="从菜单里移除" onClick={() => setRows(rows.filter((x) => x.model !== r.model))}>
+                  <X size={14} />
+                </button>
+              </>
+            )}
+          />
+          {rest.length > 0 && (
+            <div className="order-add">
+              <Plus size={14} />
+              <select
+                className="select select-sm"
+                value=""
+                onChange={(e) => e.target.value && setRows([...rows, { model: e.target.value, role: guessRole(e.target.value) }])}
+              >
+                <option value="">添加模型…</option>
+                {rest.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.id}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </Row>
+        <Row label="接入步骤">
+          <ol className="desk-ol">
             <li>
-              打开桌面版：Help → Troubleshooting → <b>Enable Developer Mode</b>（只需一次）
+              桌面版里打开 Help → Troubleshooting → <b>Enable Developer Mode</b>（只需一次）
             </li>
             <li>
-              <button className="btn btn-sm btn-primary" onClick={() => run("apply")} disabled={!routes.length || busy}>
-                <Check size={14} />
-                {connected ? "更新到桌面版" : "一键写入桌面版"}
-              </button>
-              {connected && (
-                <button className="btn btn-sm btn-ghost" onClick={() => run("restore")} disabled={busy}>
-                  <RotateCcw size={13} />
-                  恢复
-                </button>
-              )}
+              点右上角的「{props.connected ? "更新配置" : "一键接入"}」
             </li>
             <li>
               <b>完全退出</b>桌面版（⌘Q）再打开
@@ -444,15 +580,17 @@ function DesktopCard(props: { baseUrl: string; apiKey: string }) {
               Developer → <b>Configure Third-Party Inference…</b> → <b>Import configuration…</b>，选择生成的 <FileJson size={12} /> 文件，再 Apply
               Changes、Relaunch。
             </p>
-            <button className="btn btn-sm" onClick={() => run("export")} disabled={!routes.length || busy}>
-              <Download size={14} />
-              生成配置文件
-            </button>
-            {file && (
-              <span className="desk-file">
-                <Check size={13} /> 已保存到 <code>{file}</code>
-              </span>
-            )}
+            <div className="desk-export">
+              <button className="btn btn-sm" onClick={() => run("export")} disabled={!routes.length || busy}>
+                <Download size={14} />
+                生成配置文件
+              </button>
+              {file && (
+                <span className="desk-file">
+                  <Check size={13} /> 已保存到 <code>{file}</code>
+                </span>
+              )}
+            </div>
             <table>
               <tbody>
                 <tr>
@@ -470,8 +608,11 @@ function DesktopCard(props: { baseUrl: string; apiKey: string }) {
               </tbody>
             </table>
           </details>
-          <p className="muted-sm desk-note">用了网关后，桌面版的云端环境和 Remote Control 不可用（官方限制）。改了模型或档位要再点一次「更新到桌面版」并重启桌面版。</p>
-        </div>
+          <p className="muted-sm">
+            桌面版只接受 claude-sonnet-*、claude-opus-* 这类模型名，所以 kiki-proxy 给每个模型分配一个这样的名字（同档多个时加 -r2、-r3），菜单里显示真实模型名，请求到网关再换回来。用了网关后，桌面版的云端环境和
+            Remote Control 不可用（官方限制）。
+          </p>
+        </Row>
       </div>
     </ClientCard>
   );

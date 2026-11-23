@@ -347,6 +347,15 @@ impl Store {
         Ok(())
     }
 
+    /// 只删失败的请求（状态码不是 2xx，或者带了错误信息），返回删了几条
+    pub fn clear_failed(&self) -> Result<usize> {
+        let conn = self.conn.lock();
+        let cond = "status < 200 OR status >= 300 OR (error IS NOT NULL AND error != '')";
+        conn.execute(&format!("DELETE FROM bodies WHERE id IN (SELECT id FROM requests WHERE {cond})"), [])?;
+        let n = conn.execute(&format!("DELETE FROM requests WHERE {cond}"), [])?;
+        Ok(n)
+    }
+
     pub fn clear(&self) -> Result<()> {
         let conn = self.conn.lock();
         conn.execute_batch("DELETE FROM bodies; DELETE FROM requests; VACUUM;")?;
@@ -357,6 +366,18 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clear_only_failed() {
+        let s = Store::memory().unwrap();
+        for (id, status, error) in [("ok", 200, ""), ("bad", 502, "上游错误"), ("odd", 200, "流中断")] {
+            let r = LogRecord { id: id.into(), ts: now_millis(), status, error: error.into(), ..Default::default() };
+            s.insert(&r, Some(&LogBodies::default())).unwrap();
+        }
+        assert_eq!(s.clear_failed().unwrap(), 2);
+        let left: Vec<String> = s.list(&LogQuery::default()).unwrap().into_iter().map(|r| r.id).collect();
+        assert_eq!(left, ["ok"]);
+    }
 
     #[test]
     fn insert_list_stats() {
