@@ -31,7 +31,7 @@ const PRESETS: { label: string; ep: Partial<EndpointConfig>; models: string[] }[
       baseUrl: "http://127.0.0.1:8787",
       auth: "none",
       proxy: "direct",
-      process: { enabled: true, command: "", workdir: "" },
+      process: { enabled: true, command: "", workdir: "", env: "" },
     },
     models: [],
   },
@@ -316,6 +316,18 @@ export default function EndpointEditor({ id }: { id: string | null }) {
                     value={ep.process.workdir}
                     placeholder="~"
                     onChange={(e) => set("process", { ...ep.process, workdir: e.target.value })}
+                  />
+                </Field>
+                <Field
+                  label="环境变量"
+                  help="程序会自动带上你终端里的环境变量（包括 ~/.zshrc 里的代理、证书设置）。还需要额外的变量就写在这里，每行一个，优先级最高"
+                >
+                  <textarea
+                    className="textarea mono"
+                    rows={3}
+                    value={ep.process.env}
+                    placeholder={"HTTPS_PROXY=http://proxy.corp:8080\nSSL_CERT_FILE=~/certs/corp-ca.pem"}
+                    onChange={(e) => set("process", { ...ep.process, env: e.target.value })}
                   />
                 </Field>
                 {!isNew && original?.process.enabled && <ProcessPanel endpointId={ep.id} dirty={JSON.stringify(original.process) !== JSON.stringify(ep.process)} />}

@@ -38,7 +38,7 @@ let config: Config = {
       baseUrl: "http://127.0.0.1:8787",
       auth: "none",
       proxy: "direct",
-      process: { enabled: true, command: "~/bin/cc-proxy --port 8787", workdir: "" },
+      process: { enabled: true, command: "~/bin/cc-proxy --port 8787", workdir: "", env: "" },
       headers: {},
       timeoutSecs: 300,
       compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
@@ -57,7 +57,7 @@ let config: Config = {
       baseUrl: "https://api.anthropic.com",
       auth: "auto",
       proxy: "clash",
-      process: { enabled: false, command: "", workdir: "" },
+      process: { enabled: false, command: "", workdir: "", env: "" },
       headers: {},
       timeoutSecs: 300,
       compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
@@ -76,7 +76,7 @@ let config: Config = {
       baseUrl: "https://api.deepseek.com",
       auth: "auto",
       proxy: "direct",
-      process: { enabled: false, command: "", workdir: "" },
+      process: { enabled: false, command: "", workdir: "", env: "" },
       headers: {},
       timeoutSecs: 300,
       compat: { sendReasoningContent: true, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
@@ -95,7 +95,7 @@ let config: Config = {
       baseUrl: "https://generativelanguage.googleapis.com",
       auth: "auto",
       proxy: "clash",
-      process: { enabled: false, command: "", workdir: "" },
+      process: { enabled: false, command: "", workdir: "", env: "" },
       headers: {},
       timeoutSecs: 300,
       compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
@@ -272,13 +272,16 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
     case "process_status":
       if (args.id !== "internal") return r(null);
       return r({
-        state: processRunning ? "running" : "restarting",
-        pid: processRunning ? 48213 : null,
+        state: processState,
+        pid: processState === "running" ? 48213 : null,
+        held: processState === "stopped",
+        paused: !running,
         startedAt: now - 2 * 3600_000,
         restarts: 1,
-        lastExit: "程序退出，退出码 1",
+        lastExit: processState === "stopped" ? "已手动停止" : "程序退出，退出码 1",
         command: "~/bin/cc-proxy --port 8787",
         logs: [
+          "[kiki-proxy 01:12:40] 已载入终端环境变量 58 个；代理 / 证书相关：HTTPS_PROXY、NO_PROXY、SSL_CERT_FILE",
           "[kiki-proxy 01:12:40] 启动：~/bin/cc-proxy --port 8787",
           "cc-proxy v0.4.2",
           "需要登录，正在打开浏览器…",
@@ -291,8 +294,12 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
         ],
       });
     case "restart_process":
-      processRunning = false;
-      setTimeout(() => (processRunning = true), 1500);
+    case "start_process":
+      processState = "starting";
+      setTimeout(() => (processState = "running"), 1500);
+      return r(null);
+    case "stop_process":
+      processState = "stopped";
       return r(null);
     case "export_desktop_config":
       return r("/Users/kirin/Downloads/kiki-proxy-claude-desktop.json");
@@ -451,4 +458,4 @@ const PRICES: Record<string, ReturnType<typeof P>> = {
   "gemini-2.5-pro": P(1.25, 10, 0.125, 0, 1048576, true, "gemini/gemini-2.5-pro", "gemini"),
 };
 
-let processRunning = true;
+let processState: "running" | "starting" | "stopped" = "running";

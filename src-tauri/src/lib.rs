@@ -158,7 +158,17 @@ fn process_status(state: State<AppState>, id: String) -> Option<ProcessStatus> {
 // 异步命令：在异步运行时里执行（同步命令跑在 macOS 主线程上，那里没有运行时）
 #[tauri::command]
 async fn restart_process(state: State<'_, AppState>, id: String) -> CmdResult<()> {
-    state.gateway.restart_process(&id);
+    state.gateway.restart_process(&id).map_err(err)
+}
+
+#[tauri::command]
+async fn start_process(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.gateway.start_process(&id).map_err(err)
+}
+
+#[tauri::command]
+async fn stop_process(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    state.gateway.stop_process(&id);
     Ok(())
 }
 
@@ -455,6 +465,8 @@ pub fn run() {
             desktop_connected,
             process_status,
             restart_process,
+            start_process,
+            stop_process,
             get_autostart,
             set_autostart,
         ])

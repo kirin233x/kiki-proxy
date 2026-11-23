@@ -64,6 +64,8 @@ export interface ProcessConfig {
   command: string;
   /** 工作目录，可以用 ~ */
   workdir: string;
+  /** 额外的环境变量，每行一个 KEY=VALUE */
+  env: string;
 }
 
 export interface ProcessStatus {
@@ -73,6 +75,10 @@ export interface ProcessStatus {
   restarts: number;
   lastExit: string;
   command: string;
+  /** 手动停止了，或者连续失败后放弃了，需要手动启动 */
+  held: boolean;
+  /** 网关已暂停 */
+  paused: boolean;
   logs: string[];
 }
 
@@ -320,6 +326,8 @@ export const api = {
 
   processStatus: (id: string) => invoke<ProcessStatus | null>("process_status", { id }),
   restartProcess: (id: string) => invoke<void>("restart_process", { id }),
+  startProcess: (id: string) => invoke<void>("start_process", { id }),
+  stopProcess: (id: string) => invoke<void>("stop_process", { id }),
 
   testEndpoint: (id: string, model?: string) => invoke<TestResult>("test_endpoint", { id, model: model ?? null }),
   testProxy: (id: string) => invoke<TestResult>("test_proxy", { id }),
@@ -371,7 +379,7 @@ export function newEndpoint(): EndpointConfig {
     baseUrl: "",
     auth: "auto",
     proxy: "system",
-    process: { enabled: false, command: "", workdir: "" },
+    process: { enabled: false, command: "", workdir: "", env: "" },
     headers: {},
     timeoutSecs: 300,
     compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },

@@ -282,6 +282,8 @@ pub struct ProcessConfig {
     pub command: String,
     /// 工作目录，可以用 ~；留空为用户目录
     pub workdir: String,
+    /// 额外的环境变量，每行一个 KEY=VALUE（优先于从终端读到的）
+    pub env: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

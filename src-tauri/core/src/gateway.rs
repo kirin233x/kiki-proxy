@@ -203,8 +203,9 @@ impl Gateway {
         self.0.clients.clear();
         self.0.processes.sync(&cfg);
         if old_port != cfg.server.port && self.status().running {
-            self.stop().await;
-            self.start().await?;
+            // 只重启网关服务本身，不连带重启本地程序
+            self.stop_server().await;
+            self.start_server().await?;
         }
         Ok(())
     }
@@ -216,7 +217,20 @@ impl Gateway {
 
     // ------------------------------------------------------------------ 服务启停
 
+    /// 启动网关，并恢复本地程序（手动停止的除外）
     pub async fn start(&self) -> Result<()> {
+        self.start_janitor();
+        self.0.processes.resume();
+        self.start_server().await
+    }
+
+    /// 暂停网关：本地程序也一起停
+    pub async fn stop(&self) {
+        self.0.processes.pause();
+        self.stop_server().await;
+    }
+
+    async fn start_server(&self) -> Result<()> {
         self.start_janitor();
         let mut guard = self.0.server.lock().await;
         if guard.is_some() {
@@ -250,7 +264,7 @@ impl Gateway {
         Ok(())
     }
 
-    pub async fn stop(&self) {
+    async fn stop_server(&self) {
         let server = self.0.server.lock().await.take();
         if let Some(s) = server {
             let _ = s.shutdown.send(());
@@ -307,8 +321,16 @@ impl Gateway {
         self.0.processes.status(endpoint_id)
     }
 
-    pub fn restart_process(&self, endpoint_id: &str) {
-        self.0.processes.restart(endpoint_id, &self.config());
+    pub fn restart_process(&self, endpoint_id: &str) -> Result<()> {
+        self.0.processes.restart(endpoint_id)
+    }
+
+    pub fn start_process(&self, endpoint_id: &str) -> Result<()> {
+        self.0.processes.start(endpoint_id)
+    }
+
+    pub fn stop_process(&self, endpoint_id: &str) {
+        self.0.processes.stop(endpoint_id)
     }
 
     /// App 退出时调用

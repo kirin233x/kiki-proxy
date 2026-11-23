@@ -55,7 +55,8 @@
       "process": {
         "enabled": true,
         "command": "~/bin/cc-proxy --port 8787",
-        "workdir": ""
+        "workdir": "",
+        "env": ""
       },
       "headers": {},
       "timeoutSecs": 300,
@@ -114,7 +115,8 @@
       "process": {
         "enabled": false,
         "command": "",
-        "workdir": ""
+        "workdir": "",
+        "env": ""
       },
       "headers": {},
       "timeoutSecs": 300,
@@ -170,7 +172,8 @@
       "process": {
         "enabled": false,
         "command": "",
-        "workdir": ""
+        "workdir": "",
+        "env": ""
       },
       "headers": {},
       "timeoutSecs": 300,
@@ -226,7 +229,8 @@
       "process": {
         "enabled": false,
         "command": "",
-        "workdir": ""
+        "workdir": "",
+        "env": ""
       },
       "headers": {},
       "timeoutSecs": 300,

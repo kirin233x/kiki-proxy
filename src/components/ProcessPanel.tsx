@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { RotateCw } from "lucide-react";
+import { Play, RotateCw, Square } from "lucide-react";
 import { api, ProcessStatus } from "../api";
-import { StatusDot } from "./ui";
+import { StatusDot, useToast } from "./ui";
 import { fmtAgo } from "../utils";
 
 const STATE: Record<ProcessStatus["state"], { label: string; tone: "ok" | "warn" | "err" | "off" | "busy" }> = {
@@ -15,6 +15,19 @@ const STATE: Record<ProcessStatus["state"], { label: string; tone: "ok" | "warn"
 /** 本地程序的运行状态 + 输出日志（每 2 秒刷新） */
 export default function ProcessPanel(props: { endpointId: string; dirty?: boolean }) {
   const [st, setSt] = useState<ProcessStatus | null | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+  const act = async (f: (id: string) => Promise<void>) => {
+    setBusy(true);
+    try {
+      await f(props.endpointId);
+      setSt(await api.processStatus(props.endpointId));
+    } catch (e) {
+      toast(String(e), true);
+    } finally {
+      setBusy(false);
+    }
+  };
   const logRef = useRef<HTMLPreElement>(null);
   const stick = useRef(true);
 
@@ -37,6 +50,9 @@ export default function ProcessPanel(props: { endpointId: string; dirty?: boolea
 
   if (st === undefined) return null;
   const meta = st ? STATE[st.state] : { label: "未运行", tone: "off" as const };
+  const alive = st && ["running", "starting", "restarting"].includes(st.state);
+  // 停下来的原因：网关暂停 / 手动停止 / 连续失败放弃
+  const why = st && !alive ? (st.paused ? "网关已暂停，启动网关后会自动运行" : st.lastExit) : "";
 
   return (
     <div className="proc">
@@ -52,11 +68,25 @@ export default function ProcessPanel(props: { endpointId: string; dirty?: boolea
         )}
         <span style={{ flex: 1 }} />
         {props.dirty && <span className="muted-sm">命令改了，保存后会自动重启</span>}
-        <button className="btn btn-sm" onClick={() => api.restartProcess(props.endpointId).then(() => api.processStatus(props.endpointId).then(setSt))}>
-          <RotateCw size={14} />
-          重启
-        </button>
+        {alive ? (
+          <>
+            <button className="btn btn-sm" disabled={busy} onClick={() => act(api.stopProcess)}>
+              <Square size={13} />
+              停止
+            </button>
+            <button className="btn btn-sm" disabled={busy} onClick={() => act(api.restartProcess)}>
+              <RotateCw size={14} />
+              重启
+            </button>
+          </>
+        ) : (
+          <button className="btn btn-sm btn-primary" disabled={busy || !!st?.paused} onClick={() => act(api.startProcess)}>
+            <Play size={13} />
+            启动
+          </button>
+        )}
       </div>
+      {why && <div className={`proc-why ${st?.state === "failed" ? "err" : ""}`}>{why}</div>}
       <pre
         className="proc-log"
         ref={logRef}
@@ -84,7 +114,7 @@ export function ProcessBadge(props: { endpointId: string }) {
       clearInterval(t);
     };
   }, [props.endpointId]);
-  const meta = st ? STATE[st.state] : { label: "未运行", tone: "off" as const };
+  const meta = st ? (st.paused ? { label: "已暂停", tone: "off" as const } : STATE[st.state]) : { label: "未运行", tone: "off" as const };
   return (
     <span className="proc-badge" title={st?.lastExit || st?.command}>
       <StatusDot tone={meta.tone} />
