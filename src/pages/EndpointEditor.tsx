@@ -94,7 +94,7 @@ export default function EndpointEditor({ id }: { id: string | null }) {
       const hit = infos.filter(Boolean).length;
       setEp((x) => ({ ...x, models: x.models.map((m, i) => (infos[i] ? applyModelInfo(m, infos[i]!) : m)) }));
       const miss = ep.models.filter((_, i) => !infos[i]).map((m) => m.upstream || m.name);
-      toast(miss.length ? `已填充 ${hit} 个模型；未收录：${miss.join("、")}` : `已填充 ${hit} 个模型的价格与上下文，保存后生效`, !hit);
+      toast(miss.length ? `已填充 ${hit} 个模型；未收录：${miss.join("、")}` : `已填充 ${hit} 个模型的上下文与图像支持，保存后生效`, !hit);
     } catch (e) {
       toast(String(e), true);
     } finally {
@@ -408,12 +408,11 @@ export default function EndpointEditor({ id }: { id: string | null }) {
             <table className="grid-table">
               <thead>
                 <tr>
-                  <th style={{ width: "18%" }}>模型 ID</th>
-                  <th style={{ width: "22%" }}>上游模型 ID</th>
+                  <th style={{ width: "24%" }}>模型 ID</th>
+                  <th style={{ width: "24%" }}>上游模型 ID</th>
                   <th>显示名称</th>
                   <th style={{ width: 96 }}>上下文</th>
                   <th style={{ width: 56 }}>图像</th>
-                  <th style={{ width: 140 }}>价格 $/M（输入/输出）</th>
                   <th style={{ width: 56 }}>启用</th>
                   <th style={{ width: 36 }} />
                 </tr>
@@ -447,28 +446,6 @@ export default function EndpointEditor({ id }: { id: string | null }) {
                       <Switch on={m.vision} onChange={(v) => updateModel(i, { vision: v })} />
                     </td>
                     <td>
-                      <div className="price-pair" title={cacheTip(m)}>
-                        <input
-                          className="input"
-                          type="number"
-                          min={0}
-                          step="0.01"
-                          value={m.price.input || ""}
-                          placeholder="0"
-                          onChange={(e) => updateModel(i, { price: { ...m.price, input: Number(e.target.value) } })}
-                        />
-                        <input
-                          className="input"
-                          type="number"
-                          min={0}
-                          step="0.01"
-                          value={m.price.output || ""}
-                          placeholder="0"
-                          onChange={(e) => updateModel(i, { price: { ...m.price, output: Number(e.target.value) } })}
-                        />
-                      </div>
-                    </td>
-                    <td>
                       <Switch on={m.enabled} onChange={(v) => updateModel(i, { enabled: v })} />
                     </td>
                     <td>
@@ -499,9 +476,9 @@ export default function EndpointEditor({ id }: { id: string | null }) {
               </button>
               <button className="btn btn-sm" disabled={!ep.models.length || filling} onClick={autoFill}>
                 <Sparkles size={14} />
-                {filling ? "查询中…" : "填充价格与上下文"}
+                {filling ? "查询中…" : "自动填充上下文"}
               </button>
-              <span className="muted-sm foot-note">数据来源：LiteLLM 公开价格表；未收录的模型需手动填写</span>
+              <span className="muted-sm foot-note">数据来源：LiteLLM 公开模型表；未收录的模型需手动填写</span>
             </div>
           </div>
           {ep.models.some((m) => m.contextWindow >= 1_000_000) && (
@@ -515,13 +492,13 @@ export default function EndpointEditor({ id }: { id: string | null }) {
         <div className="settings-group">
           <h3>
             故障切换
-            <span className="h3-hint">这个端点出错时，按顺序改用下面的模型（触发条件在「路由与切换」里设置）</span>
+            <span className="h3-hint">该端点请求失败时依次尝试以下模型，触发条件在「设置」中配置</span>
           </h3>
           <div className="panel panel-pad">
             <ModelChain value={ep.fallbacks} onChange={(v) => set("fallbacks", v)} exclude={ep.models.map((m) => `${ep.id}/${m.name}`)} />
             {ep.models.length > 0 && (
               <details className="per-model">
-                <summary>为单个模型单独设置（优先于端点设置）</summary>
+                <summary>按模型单独设置（优先于端点设置）</summary>
                 {ep.models.map((m, i) => (
                   <div key={i} className="per-model-row">
                     <code>
@@ -633,9 +610,4 @@ export default function EndpointEditor({ id }: { id: string | null }) {
       )}
     </div>
   );
-}
-
-function cacheTip(m: ModelConfig): string | undefined {
-  if (!m.price.cacheRead && !m.price.cacheWrite) return undefined;
-  return "缓存读 $" + m.price.cacheRead + "/M · 缓存写 $" + m.price.cacheWrite + "/M";
 }

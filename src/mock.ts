@@ -43,8 +43,26 @@ let config: Config = {
       timeoutSecs: 300,
       compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
       models: [
-        { name: "sonnet", upstream: "claude-sonnet-4-5", displayName: "Sonnet（内部）", enabled: true, contextWindow: 1000000, vision: true, price: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }, fallbacks: [] },
-        { name: "opus", upstream: "claude-opus-4-5", displayName: "Opus（内部）", enabled: true, contextWindow: 200000, vision: true, price: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }, fallbacks: [] },
+        {
+          name: "sonnet",
+          upstream: "claude-sonnet-4-5",
+          displayName: "Sonnet（内部）",
+          enabled: true,
+          contextWindow: 1000000,
+          vision: true,
+          price: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+          fallbacks: [],
+        },
+        {
+          name: "opus",
+          upstream: "claude-opus-4-5",
+          displayName: "Opus（内部）",
+          enabled: true,
+          contextWindow: 200000,
+          vision: true,
+          price: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+          fallbacks: [],
+        },
       ],
       fallbacks: ["anthropic/claude-sonnet-4-5", "ds/deepseek-chat"],
       note: "",
@@ -62,8 +80,26 @@ let config: Config = {
       timeoutSecs: 300,
       compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
       models: [
-        { name: "claude-sonnet-4-5", upstream: "", displayName: "", enabled: true, contextWindow: 200000, vision: true, price: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }, fallbacks: [] },
-        { name: "claude-haiku-4-5", upstream: "", displayName: "", enabled: true, contextWindow: 200000, vision: true, price: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 }, fallbacks: [] },
+        {
+          name: "claude-sonnet-4-5",
+          upstream: "",
+          displayName: "",
+          enabled: true,
+          contextWindow: 200000,
+          vision: true,
+          price: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+          fallbacks: [],
+        },
+        {
+          name: "claude-haiku-4-5",
+          upstream: "",
+          displayName: "",
+          enabled: true,
+          contextWindow: 200000,
+          vision: true,
+          price: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+          fallbacks: [],
+        },
       ],
       fallbacks: [],
       note: "",
@@ -81,8 +117,26 @@ let config: Config = {
       timeoutSecs: 300,
       compat: { sendReasoningContent: true, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
       models: [
-        { name: "deepseek-chat", upstream: "", displayName: "DeepSeek V3", enabled: true, contextWindow: 131072, vision: false, price: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 }, fallbacks: [] },
-        { name: "deepseek-reasoner", upstream: "", displayName: "DeepSeek R", enabled: true, contextWindow: 131072, vision: false, price: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 }, fallbacks: [] },
+        {
+          name: "deepseek-chat",
+          upstream: "",
+          displayName: "DeepSeek V3",
+          enabled: true,
+          contextWindow: 131072,
+          vision: false,
+          price: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 },
+          fallbacks: [],
+        },
+        {
+          name: "deepseek-reasoner",
+          upstream: "",
+          displayName: "DeepSeek R",
+          enabled: true,
+          contextWindow: 131072,
+          vision: false,
+          price: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 },
+          fallbacks: [],
+        },
       ],
       fallbacks: [],
       note: "",
@@ -99,7 +153,18 @@ let config: Config = {
       headers: {},
       timeoutSecs: 300,
       compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
-      models: [{ name: "gemini-2.5-pro", upstream: "", displayName: "", enabled: true, contextWindow: 1048576, vision: true, price: { input: 1.25, output: 10, cacheRead: 0.31, cacheWrite: 0 }, fallbacks: [] }],
+      models: [
+        {
+          name: "gemini-2.5-pro",
+          upstream: "",
+          displayName: "",
+          enabled: true,
+          contextWindow: 1048576,
+          vision: true,
+          price: { input: 1.25, output: 10, cacheRead: 0.31, cacheWrite: 0 },
+          fallbacks: [],
+        },
+      ],
       fallbacks: [],
       note: "",
     },
@@ -145,9 +210,7 @@ function fakeLog(i: number): LogRecord {
     stream: i % 3 !== 2,
     usage: { input, output, cacheRead: i % 2 ? input * 3 : 0, cacheWrite: 0 },
     cost: err ? 0 : (input * 3 + output * 15) / 1e6,
-    attempts: failover
-      ? [{ gatewayModel: m, endpoint: ep.name, status: 503, error: "[内部模型服务] upstream connect error", durationMs: 1200 }]
-      : [],
+    attempts: failover ? [{ gatewayModel: m, endpoint: ep.name, status: 503, error: "[内部模型服务] upstream connect error", durationMs: 1200 }] : [],
   };
 }
 
@@ -157,9 +220,7 @@ function usageRows(key: "gatewayModel" | "endpointId"): UsageRow[] {
   const map = new Map<string, UsageRow>();
   for (const l of logs) {
     const k = l[key];
-    const r =
-      map.get(k) ??
-      ({ key: k, label: l.endpointName, requests: 0, errors: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, avgMs: 0 } as UsageRow);
+    const r = map.get(k) ?? ({ key: k, label: l.endpointName, requests: 0, errors: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, avgMs: 0 } as UsageRow);
     r.requests++;
     if (l.status !== 200) r.errors++;
     r.input += l.usage.input;
@@ -202,9 +263,22 @@ function stats(days: number): Stats {
   return { total, byModel, byEndpoint: usageRows("endpointId"), daily };
 }
 
-
 const clients: ClientInfo[] = [
-  { id: "claude", name: "Claude Code", path: "~/.claude/settings.json", connected: true, hasBackup: true, model: "internal/sonnet", maxContextTokens: 0 },
+  {
+    id: "claude",
+    name: "Claude Code",
+    path: "~/.claude/settings.json",
+    connected: true,
+    hasBackup: true,
+    model: "internal/sonnet",
+    maxContextTokens: 0,
+    subagentModel: "",
+    tiers: [
+      { role: "opus", model: "internal/opus", label: "Opus（内部）", supports1m: false },
+      { role: "sonnet", model: "internal/sonnet", label: "Sonnet（内部）", supports1m: true },
+      { role: "haiku", model: "ds/deepseek-chat", label: "DeepSeek V3", supports1m: false },
+    ],
+  },
   { id: "codex", name: "Codex CLI", path: "~/.codex/config.toml", connected: false, hasBackup: false, model: "", maxContextTokens: 0 },
   { id: "gemini", name: "Gemini CLI", path: "~/.gemini/.env", connected: false, hasBackup: false, model: "", maxContextTokens: 0 },
 ];
@@ -247,7 +321,13 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
         config.endpoints
           .filter((e) => e.enabled)
           .flatMap((e) =>
-            e.models.map((m) => ({ id: `${e.id}/${m.name}`, displayName: m.displayName || `${e.id}/${m.name}`, endpoint: e.name, vision: m.vision, contextWindow: m.contextWindow })),
+            e.models.map((m) => ({
+              id: `${e.id}/${m.name}`,
+              displayName: m.displayName || `${e.id}/${m.name}`,
+              endpoint: e.name,
+              vision: m.vision,
+              contextWindow: m.contextWindow,
+            })),
           )
           .map((m, i) => ({ m, i }))
           .sort((a, b) => pos(a.m.id) - pos(b.m.id) || a.i - b.i)
@@ -256,14 +336,36 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
     }
     case "explain_route": {
       const name = String(args.model).replace(/^claude@/, "");
-      const rule = config.rules.find((x) => x.enabled && new RegExp("^" + x.pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i").test(name));
+      const rule = config.rules.find(
+        (x) =>
+          x.enabled &&
+          new RegExp(
+            "^" +
+              x.pattern
+                .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+                .replace(/\*/g, ".*")
+                .replace(/\?/g, ".") +
+              "$",
+            "i",
+          ).test(name),
+      );
       const target = rule?.target || (name.includes("/") ? name : config.routing.defaultModel);
       const [prefix, model] = target.split("/");
       const ep = config.endpoints.find((e) => e.id === prefix);
       if (!ep) throw `kiki-proxy 找不到模型「${args.model}」`;
       const m = ep.models.find((x) => x.name === model);
-      const hops = [{ gatewayModel: target, endpointId: ep.id, endpointName: ep.name, protocol: ep.protocol, upstreamModel: m?.upstream || model, proxy: rule?.proxy || ep.proxy, rule: rule?.name ?? (name.includes("/") ? "" : "默认模型") }];
-      for (const f of (m?.fallbacks.length ? m.fallbacks : ep.fallbacks)) {
+      const hops = [
+        {
+          gatewayModel: target,
+          endpointId: ep.id,
+          endpointName: ep.name,
+          protocol: ep.protocol,
+          upstreamModel: m?.upstream || model,
+          proxy: rule?.proxy || ep.proxy,
+          rule: rule?.name ?? (name.includes("/") ? "" : "默认模型"),
+        },
+      ];
+      for (const f of m?.fallbacks.length ? m.fallbacks : ep.fallbacks) {
         const [p2, m2] = f.split("/");
         const e2 = config.endpoints.find((e) => e.id === p2);
         if (e2) hops.push({ gatewayModel: f, endpointId: e2.id, endpointName: e2.name, protocol: e2.protocol, upstreamModel: m2, proxy: e2.proxy, rule: "故障切换" });
@@ -368,7 +470,13 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
       await sleep(800 + i * 1500);
       return r(
         ep.id === "internal" && i === 1
-          ? { kind: "model", label: args.model, status: "fail", detail: "HTTP 403：model not allowed for this user（鉴权失败：检查 API Key 或登录状态、是否有这个模型的权限）", ms: 310 }
+          ? {
+              kind: "model",
+              label: args.model,
+              status: "fail",
+              detail: "HTTP 403：model not allowed for this user（鉴权失败：检查 API Key 或登录状态、是否有这个模型的权限）",
+              ms: 310,
+            }
           : { kind: "model", label: args.model, status: "ok", detail: "回复了「Hello!」", ms: 800 + i * 1500 },
       );
     }
@@ -376,20 +484,33 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
       await sleep(900);
       const ep = config.endpoints.find((e) => e.id === args.id)!;
       if (ep.id === "gm")
-        return r({ ok: false, steps: [{ kind: "network", label: "网络", status: "fail", detail: "经Clash访问 generativelanguage.googleapis.com 失败：连接失败：Connection refused", ms: 3 }] });
-      const steps: any[] = [{ kind: "network", label: "网络", status: "ok", detail: `经${ep.proxy === "direct" ? "直连" : "Clash"}访问 ${new URL(ep.baseUrl).host} 正常`, ms: 42 }];
+        return r({
+          ok: false,
+          steps: [{ kind: "network", label: "网络", status: "fail", detail: "经Clash访问 generativelanguage.googleapis.com 失败：连接失败：Connection refused", ms: 3 }],
+        });
+      const steps: any[] = [
+        { kind: "network", label: "网络", status: "ok", detail: `经${ep.proxy === "direct" ? "直连" : "Clash"}访问 ${new URL(ep.baseUrl).host} 正常`, ms: 42 },
+      ];
       steps.push(
         ep.process.enabled
           ? { kind: "auth", label: "鉴权", status: "skip", detail: "没有配置 API Key（服务不需要的话可以忽略）", ms: 0 }
           : { kind: "auth", label: "鉴权", status: "ok", detail: "已配置 API Key，下一步实际调用模型时验证", ms: 0 },
       );
-      ep.models.filter((m) => m.enabled).forEach((m, i) =>
-        steps.push(
-          ep.id === "internal" && i === 1
-            ? { kind: "model", label: m.name, status: "fail", detail: "HTTP 403：model not allowed for this user（鉴权失败：检查 API Key 或登录状态、是否有这个模型的权限）", ms: 310 }
-            : { kind: "model", label: m.name, status: "ok", detail: "回复了「Hello!」", ms: 600 + i * 230 },
-        ),
-      );
+      ep.models
+        .filter((m) => m.enabled)
+        .forEach((m, i) =>
+          steps.push(
+            ep.id === "internal" && i === 1
+              ? {
+                  kind: "model",
+                  label: m.name,
+                  status: "fail",
+                  detail: "HTTP 403：model not allowed for this user（鉴权失败：检查 API Key 或登录状态、是否有这个模型的权限）",
+                  ms: 310,
+                }
+              : { kind: "model", label: m.name, status: "ok", detail: "回复了「Hello!」", ms: 600 + i * 230 },
+          ),
+        );
       return r({ ok: steps.every((x) => x.status !== "fail"), steps });
     }
     case "test_proxy":
@@ -414,7 +535,13 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
         stream: record.stream,
         system: [{ type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." }],
         messages: [
-          { role: "user", content: [{ type: "text", text: "帮我看看这个函数为什么慢" }, { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgoAAAANSUhEUgAA…" } }] },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "帮我看看这个函数为什么慢" },
+              { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgoAAAANSUhEUgAA…" } },
+            ],
+          },
         ],
         tools: [{ name: "Read", description: "Reads a file", input_schema: { type: "object" } }],
       };
@@ -504,10 +631,17 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
   throw new Error(`mock: 未实现的命令 ${cmd}`);
 }
 
-
 let pricingLoaded = true;
 const P = (input: number, output: number, cacheRead: number, cacheWrite: number, contextWindow: number, vision: boolean, matched: string, provider: string) => ({
-  input, output, cacheRead, cacheWrite, contextWindow, vision, matched, provider, maxOutput: 64000,
+  input,
+  output,
+  cacheRead,
+  cacheWrite,
+  contextWindow,
+  vision,
+  matched,
+  provider,
+  maxOutput: 64000,
 });
 const PRICES: Record<string, ReturnType<typeof P>> = {
   "claude-sonnet-4-5": P(3, 15, 0.3, 3.75, 200000, true, "claude-sonnet-4-5", "anthropic"),

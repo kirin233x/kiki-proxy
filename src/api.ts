@@ -238,6 +238,16 @@ export interface ClientInfo {
   hasBackup: boolean;
   model: string;
   maxContextTokens: number;
+  /** Claude Code：当前的模型映射 */
+  tiers?: TierInfo[];
+  subagentModel?: string;
+}
+
+export interface TierInfo {
+  role: "opus" | "sonnet" | "haiku";
+  model: string;
+  label: string;
+  supports1m: boolean;
 }
 
 export interface ApplyReport {
@@ -280,6 +290,10 @@ export interface ApplyOptions {
   maxContextTokens: number;
   /** 所有 subagent 固定用的模型，留空由 Claude Code 决定 */
   subagentModel: string;
+  /** 各角色在 /model 菜单里的显示名，留空用模型显示名 */
+  tierLabels: Record<string, string>;
+  /** 各角色是否声明支持 1M */
+  tier1m: Record<string, boolean>;
 }
 
 export interface ListedModel {

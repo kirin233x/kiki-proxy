@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientInfo {
     pub id: String,
@@ -18,7 +18,28 @@ pub struct ClientInfo {
     /// 当前配置的模型
     pub model: String,
     pub max_context_tokens: u32,
+    /// Claude Code：当前的模型映射（Opus / Sonnet / Haiku）
+    pub tiers: Vec<TierInfo>,
+    /// Claude Code：当前的 subagent 模型
+    pub subagent_model: String,
 }
+
+/// Claude Code 模型映射的一档
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TierInfo {
+    /// opus / sonnet / haiku
+    pub role: String,
+    /// 网关模型名（不带 [1m]）
+    pub model: String,
+    /// /model 菜单里显示的名字
+    pub label: String,
+    #[serde(rename = "supports1m")]
+    pub supports_1m: bool,
+}
+
+/// Claude Code 的三档，和环境变量名里的写法对应
+pub const CLAUDE_TIERS: [(&str, &str); 3] = [("opus", "OPUS"), ("sonnet", "SONNET"), ("haiku", "HAIKU")];
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -37,6 +58,10 @@ pub struct ApplyOptions {
     pub max_context_tokens: u32,
     /// Claude Code：所有 subagent 固定用这个模型（CLAUDE_CODE_SUBAGENT_MODEL）；留空由 Claude Code 决定
     pub subagent_model: String,
+    /// Claude Code：各档在 /model 菜单里的显示名（键为 opus / sonnet / haiku），留空用模型的显示名
+    pub tier_labels: std::collections::HashMap<String, String>,
+    /// Claude Code：各档是否声明支持 1M（加 [1m] 后缀）；没给就按模型的上下文窗口判断
+    pub tier_1m: std::collections::HashMap<String, bool>,
 }
 
 fn home() -> Result<PathBuf> {
@@ -140,6 +165,19 @@ pub fn list(port: u16) -> Vec<ClientInfo> {
                 .pointer("/env/CLAUDE_CODE_MAX_CONTEXT_TOKENS")
                 .and_then(|x| x.as_str().and_then(|s| s.parse().ok()).or_else(|| x.as_u64()))
                 .unwrap_or(0) as u32,
+            tiers: CLAUDE_TIERS
+                .iter()
+                .map(|(role, env)| {
+                    let raw = v.pointer(&format!("/env/ANTHROPIC_DEFAULT_{env}_MODEL")).and_then(Value::as_str).unwrap_or("");
+                    TierInfo {
+                        role: (*role).into(),
+                        model: crate::router::normalize_name(raw),
+                        label: v.pointer(&format!("/env/ANTHROPIC_DEFAULT_{env}_MODEL_NAME")).and_then(Value::as_str).unwrap_or("").into(),
+                        supports_1m: raw.to_ascii_lowercase().ends_with("[1m]"),
+                    }
+                })
+                .collect(),
+            subagent_model: v.pointer("/env/CLAUDE_CODE_SUBAGENT_MODEL").and_then(Value::as_str).map(crate::router::normalize_name).unwrap_or_default(),
             has_backup: backup_path(&p).exists(),
             path: p.display().to_string(),
         });
@@ -161,6 +199,7 @@ pub fn list(port: u16) -> Vec<ClientInfo> {
             max_context_tokens: 0,
             has_backup: backup_path(&p).exists(),
             path: p.display().to_string(),
+            ..Default::default()
         });
     }
     if let Ok(p) = gemini_env_path() {
@@ -176,6 +215,7 @@ pub fn list(port: u16) -> Vec<ClientInfo> {
             max_context_tokens: 0,
             has_backup: backup_path(&p).exists(),
             path: p.display().to_string(),
+            ..Default::default()
         });
     }
     out
@@ -311,8 +351,8 @@ fn apply_claude(port: u16, key: &str, cfg: &crate::config::Config, opts: &ApplyO
     }
 
     // /model 里的 Opus / Sonnet / Haiku 三档：没单独指定就跟主模型一致
-    let tiers = [("OPUS", &opts.opus_model), ("SONNET", &opts.sonnet_model), ("HAIKU", &opts.small_model)];
-    for (tier, chosen) in tiers {
+    let tiers = [("opus", "OPUS", &opts.opus_model), ("sonnet", "SONNET", &opts.sonnet_model), ("haiku", "HAIKU", &opts.small_model)];
+    for (role, tier, chosen) in tiers {
         let id = if chosen.is_empty() { &opts.model } else { chosen };
         let base = format!("ANTHROPIC_DEFAULT_{tier}_MODEL");
         if id.is_empty() {
@@ -322,8 +362,10 @@ fn apply_claude(port: u16, key: &str, cfg: &crate::config::Config, opts: &ApplyO
             continue;
         }
         let m = meta(cfg, id);
-        ch.set(env, e, &base, json!(if m.is_1m { format!("{}[1m]", m.id) } else { m.id.clone() }));
-        ch.set(env, e, &format!("{base}_NAME"), json!(m.name));
+        let one_m = opts.tier_1m.get(role).copied().unwrap_or(m.is_1m);
+        let label = opts.tier_labels.get(role).map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or(&m.name);
+        ch.set(env, e, &base, json!(if one_m { format!("{}[1m]", m.id) } else { m.id.clone() }));
+        ch.set(env, e, &format!("{base}_NAME"), json!(label));
         ch.set(env, e, &format!("{base}_DESCRIPTION"), json!(format!("{} · kiki-proxy", m.id)));
         ch.remove(env, e, &format!("{base}_SUPPORTED_CAPABILITIES"), "网关模式下不生效");
     }
@@ -723,6 +765,26 @@ mod tests {
         let found: Vec<String> = inspect_claude(&cfg).issues.into_iter().map(|i| i.key).collect();
         assert!(found.contains(&"ANTHROPIC_DEFAULT_OPUS_MODEL".to_string()), "{found:?}");
         assert!(found.contains(&"ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME".to_string()), "{found:?}");
+
+        // 自定义显示名和 1M 声明；读回来要一致，自定义名字不算问题
+        let mut opts2 = opts.clone();
+        opts2.tier_labels.insert("opus".into(), "旗舰 · 内部".into());
+        opts2.tier_1m.insert("haiku".into(), true);
+        opts2.tier_1m.insert("sonnet".into(), false);
+        opts2.subagent_model = "internal/haiku".into();
+        apply("claude", &cfg, &opts2).unwrap();
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(home.join(".claude/settings.json")).unwrap()).unwrap();
+        assert_eq!(v["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"], json!("旗舰 · 内部"));
+        assert_eq!(v["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"], json!("internal/haiku[1m]"));
+        assert_eq!(v["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"], json!("internal/sonnet"));
+        assert_eq!(v["env"]["CLAUDE_CODE_SUBAGENT_MODEL"], json!("internal/haiku"));
+        assert!(inspect_claude(&cfg).issues.is_empty(), "{:?}", inspect_claude(&cfg).issues);
+        let info = list(41521).into_iter().find(|c| c.id == "claude").unwrap();
+        let t: Vec<(String, String, String, bool)> = info.tiers.into_iter().map(|t| (t.role, t.model, t.label, t.supports_1m)).collect();
+        assert_eq!(t[0], ("opus".into(), "internal/sonnet".into(), "旗舰 · 内部".into(), true));
+        assert_eq!(t[1], ("sonnet".into(), "internal/sonnet".into(), "Sonnet（内部）".into(), false));
+        assert_eq!(t[2], ("haiku".into(), "internal/haiku".into(), "internal/haiku".into(), true));
+        assert_eq!(info.subagent_model, "internal/haiku");
     }
 
     #[test]
@@ -911,7 +973,9 @@ pub fn inspect_claude(cfg: &crate::config::Config) -> ClaudeInspection {
                 continue;
             };
             let m_ok = model_problem(cfg, m).is_none();
-            if m_ok && model_problem(cfg, name).is_some() && !name.contains(&crate::router::normalize_name(m)) {
+            // 只查长得像模型 ID 的名字（如 gpt-6.2-sol）；用户自己起的显示名（带空格、中文）不算问题
+            let looks_like_id = !name.is_empty() && name.contains('-') && name.chars().all(|c| c.is_ascii_alphanumeric() || "-._/:[]".contains(c));
+            if m_ok && looks_like_id && model_problem(cfg, name).is_some() && !name.contains(&crate::router::normalize_name(m)) {
                 let want = meta(cfg, m).name;
                 if name != want {
                     issue(&format!("ANTHROPIC_DEFAULT_{tier}_MODEL_NAME"), name, format!("显示名和实际模型（{m}）对不上，/model 里会显示错的名字"));

@@ -10,7 +10,62 @@ export function useSortable(onReorder: (from: number, to: number) => void) {
   const listRef = useRef<HTMLDivElement>(null);
   const rects = useRef<DOMRect[]>([]);
   const startY = useRef(0);
-  const [drag, setDrag] = useState<{ from: number; to: number; dy: number } | null>(null);
+  // 页面滚动容器：拖到边缘时自动滚动，位置计算要把滚过的距离算进去
+  const scroller = useRef<HTMLElement | null>(null);
+  const startScroll = useRef(0);
+  const lastY = useRef(0);
+  const raf = useRef(0);
+  const [drag, setDragState] = useState<{ from: number; to: number; dy: number } | null>(null);
+  const dragRef = useRef(drag);
+  const setDrag = (d: typeof drag) => {
+    dragRef.current = d;
+    setDragState(d);
+  };
+
+  const update = (clientY: number) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const r = rects.current;
+    const self = r[d.from];
+    const scrolled = (scroller.current?.scrollTop ?? 0) - startScroll.current;
+    // 允许稍微超出首尾一点，保证能拖到第一个/最后一个
+    const dy = Math.max(r[0].top - self.top - 10, Math.min(r[r.length - 1].bottom - self.bottom + 10, clientY - startY.current + scrolled));
+    const center = self.top + self.height / 2 + dy;
+    let to = d.from;
+    for (let j = 0; j < d.from; j++) {
+      if (center <= r[j].top + r[j].height / 2) {
+        to = j;
+        break;
+      }
+    }
+    if (to === d.from) {
+      for (let j = r.length - 1; j > d.from; j--) {
+        if (center >= r[j].top + r[j].height / 2) {
+          to = j;
+          break;
+        }
+      }
+    }
+    setDrag({ ...d, dy, to });
+  };
+
+  // 指针靠近滚动区域上下边缘时自动滚动
+  const autoScroll = () => {
+    const el = scroller.current;
+    if (!dragRef.current || !el) return;
+    const box = el.getBoundingClientRect();
+    const edge = 70;
+    const y = lastY.current;
+    let v = 0;
+    if (y < box.top + edge) v = -Math.ceil(((box.top + edge - y) / edge) * 14);
+    else if (y > box.bottom - edge) v = Math.ceil(((y - (box.bottom - edge)) / edge) * 14);
+    if (v) {
+      const before = el.scrollTop;
+      el.scrollTop += v;
+      if (el.scrollTop !== before) update(lastY.current);
+    }
+    raf.current = requestAnimationFrame(autoScroll);
+  };
 
   const shift = (j: number) => {
     if (!drag || j === drag.from) return 0;
@@ -27,40 +82,28 @@ export function useSortable(onReorder: (from: number, to: number) => void) {
       e.preventDefault();
       const rows = Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-sort-row]") ?? []);
       rects.current = rows.map((r) => r.getBoundingClientRect());
-      startY.current = e.clientY;
+      startY.current = lastY.current = e.clientY;
+      scroller.current = scrollParent(listRef.current);
+      startScroll.current = scroller.current?.scrollTop ?? 0;
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       setDrag({ from: i, to: i, dy: 0 });
+      cancelAnimationFrame(raf.current);
+      raf.current = requestAnimationFrame(autoScroll);
     },
     onPointerMove: (e: React.PointerEvent) => {
-      if (!drag) return;
-      const r = rects.current;
-      const self = r[drag.from];
-      const dy = Math.max(r[0].top - self.top, Math.min(r[r.length - 1].bottom - self.bottom, e.clientY - startY.current));
-      const center = self.top + self.height / 2 + dy;
-      let to = drag.from;
-      for (let j = 0; j < drag.from; j++) {
-        if (center < r[j].top + r[j].height / 2) {
-          to = j;
-          break;
-        }
-      }
-      if (to === drag.from) {
-        for (let j = r.length - 1; j > drag.from; j--) {
-          if (center > r[j].top + r[j].height / 2) {
-            to = j;
-            break;
-          }
-        }
-      }
-      setDrag({ ...drag, dy, to });
+      if (!dragRef.current) return;
+      lastY.current = e.clientY;
+      update(e.clientY);
     },
     onPointerUp: () => finish(),
     onPointerCancel: () => finish(),
   });
 
   const finish = () => {
-    if (!drag) return;
-    const { from, to } = drag;
+    cancelAnimationFrame(raf.current);
+    const d = dragRef.current;
+    if (!d) return;
+    const { from, to } = d;
     setDrag(null);
     if (from !== to) onReorder(from, to);
   };
@@ -78,6 +121,14 @@ export function useSortable(onReorder: (from: number, to: number) => void) {
     /** 拖动中这一行落下后的序号 */
     index: (i: number) => (!drag ? i : drag.from === i ? drag.to : i + Math.sign(shift(i))),
   };
+}
+
+function scrollParent(el: HTMLElement | null): HTMLElement | null {
+  for (let p = el?.parentElement; p; p = p.parentElement) {
+    const o = getComputedStyle(p).overflowY;
+    if ((o === "auto" || o === "scroll") && p.scrollHeight > p.clientHeight) return p;
+  }
+  return (document.scrollingElement as HTMLElement) ?? null;
 }
 
 /** 两行之间的间距（行之间有 gap 时也要让出来） */
