@@ -294,3 +294,90 @@ fn apply_gemini(port: u16, key: &str, opts: &ApplyOptions) -> Result<()> {
     s["security"]["auth"]["selectedType"] = json!("gemini-api-key");
     write_json(&sp, &s)
 }
+
+// ------------------------------------------------------------------ Claude Code 桌面版
+
+/// 桌面版模型列表里的一项
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopModel {
+    /// 发给网关的模型名（名字里没有 claude 的会加上 claude@ 前缀，桌面版只认 Claude 模型）
+    pub name: String,
+    /// 列表里显示的名字
+    pub label: String,
+    pub supports_1m: bool,
+}
+
+/// 桌面版「Import configuration…」可以导入的 JSON 配置（键名见 Claude 桌面版第三方推理配置文档）
+pub fn desktop_config(port: u16, access_key: &str, models: &[DesktopModel]) -> Value {
+    let list: Vec<Value> = models
+        .iter()
+        .map(|m| {
+            let lower = m.name.to_lowercase();
+            let name = if lower.contains("claude") || lower.contains("anthropic") {
+                m.name.clone()
+            } else {
+                format!("{}{}", crate::router::CLAUDE_ALIAS, m.name)
+            };
+            let mut o = json!({ "name": name });
+            if !m.label.is_empty() {
+                o["labelOverride"] = json!(m.label);
+            }
+            if m.supports_1m {
+                o["supports1m"] = json!(true);
+            }
+            o
+        })
+        .collect();
+    json!({
+        "inferenceProvider": "gateway",
+        "inferenceGatewayBaseUrl": base_url(port),
+        "inferenceGatewayApiKey": token(access_key),
+        "inferenceGatewayAuthScheme": "bearer",
+        "inferenceModels": list,
+    })
+}
+
+/// 写到「下载」文件夹，返回文件路径
+pub fn write_desktop_config(port: u16, access_key: &str, models: &[DesktopModel]) -> Result<PathBuf> {
+    let dir = home()?.join("Downloads");
+    let dir = if dir.is_dir() { dir } else { home()? };
+    let p = dir.join("kiki-proxy-claude-desktop.json");
+    write_json(&p, &desktop_config(port, access_key, models))?;
+    Ok(p)
+}
+
+/// 桌面版当前应用的配置是否指向本网关（只是尽力检查：在它的配置库里找网关地址）
+pub fn desktop_connected(port: u16) -> bool {
+    let Ok(h) = home() else { return false };
+    let dir = h.join("Library/Application Support/Claude-3p/configLibrary");
+    let needle = base_url(port);
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .any(|e| std::fs::read_to_string(e.path()).is_ok_and(|s| s.contains(&needle)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn desktop_config_shape() {
+        let v = desktop_config(
+            41521,
+            "",
+            &[
+                DesktopModel { name: "internal/sonnet".into(), label: "Sonnet（内部）".into(), supports_1m: true },
+                DesktopModel { name: "anthropic/claude-haiku-4-5".into(), label: String::new(), supports_1m: false },
+            ],
+        );
+        assert_eq!(v["inferenceProvider"], json!("gateway"));
+        assert_eq!(v["inferenceGatewayBaseUrl"], json!("http://127.0.0.1:41521"));
+        assert_eq!(v["inferenceGatewayApiKey"], json!("kiki-proxy"));
+        assert_eq!(v["inferenceModels"][0], json!({"name":"claude@internal/sonnet","labelOverride":"Sonnet（内部）","supports1m":true}));
+        assert_eq!(v["inferenceModels"][1], json!({"name":"anthropic/claude-haiku-4-5"}));
+    }
+}

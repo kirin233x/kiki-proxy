@@ -1,7 +1,6 @@
 //! 端到端测试：起一个模拟上游（4 种协议），通过真实的 HTTP 请求走一遍网关。
 //! 覆盖 4×4 种「客户端协议 × 上游协议」组合的流式和非流式、故障切换、插件重新登录。
 
-use async_trait::async_trait;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -9,7 +8,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Router;
 use kiki_core::config::*;
 use kiki_core::ir::*;
-use kiki_core::plugin::*;
+use kiki_core::secrets::MemorySecrets;
 use kiki_core::protocol::{self, Compat, EncodeCtx, Normalizer};
 use kiki_core::sse::SseParser;
 use kiki_core::Gateway;
@@ -85,13 +84,6 @@ async fn up_handler(State(u): State<Upstream>, uri: axum::http::Uri, headers: He
         "an" if path.ends_with("/models") => {
             (StatusCode::OK, r#"{"data":[{"id":"claude-b"},{"id":"claude-a"}],"has_more":false}"#).into_response()
         }
-        "auth" => {
-            if headers.get("x-test-token").and_then(|v| v.to_str().ok()) == Some("token-2") {
-                upstream_reply(Protocol::OpenaiChat, stream)
-            } else {
-                (StatusCode::UNAUTHORIZED, r#"{"error":{"message":"expired"}}"#).into_response()
-            }
-        }
         "an" => upstream_reply(Protocol::Anthropic, stream),
         "oa" => upstream_reply(Protocol::OpenaiChat, stream),
         "rs" => upstream_reply(Protocol::OpenaiResponses, stream),
@@ -105,33 +97,6 @@ async fn serve(router: Router) -> u16 {
     let port = l.local_addr().unwrap().port();
     tokio::spawn(async move { axum::serve(l, router).await.unwrap() });
     port
-}
-
-// ------------------------------------------------------------------ 测试插件：第一次登录给过期 token
-
-struct TestAuth {
-    logins: Arc<Mutex<u32>>,
-}
-
-#[async_trait]
-impl Plugin for TestAuth {
-    fn id(&self) -> &'static str {
-        "test_auth"
-    }
-    fn name(&self) -> &'static str {
-        "测试鉴权"
-    }
-    fn uses_login(&self) -> bool {
-        true
-    }
-    async fn login(&self, _ctx: &PluginCtx) -> anyhow::Result<Credential> {
-        let mut n = self.logins.lock().unwrap();
-        *n += 1;
-        Ok(Credential::bearer(format!("token-{n}")))
-    }
-    fn apply_credential(&self, cred: &Credential, req: &mut UpstreamRequest) -> anyhow::Result<()> {
-        req.set_header("x-test-token", &cred.token)
-    }
 }
 
 // ------------------------------------------------------------------ 准备网关
@@ -158,7 +123,6 @@ struct Env {
     gw_port: u16,
     upstream: Upstream,
     gateway: Gateway,
-    logins: Arc<Mutex<u32>>,
 }
 
 async fn setup() -> Env {
@@ -177,18 +141,10 @@ async fn setup() -> Env {
         endpoint("rs", Protocol::OpenaiResponses, base("rs"), "gpt5"),
         endpoint("gm", Protocol::Gemini, base("gm"), "gemini"),
         EndpointConfig { fallbacks: vec!["oa/gpt".into()], ..endpoint("bad", Protocol::OpenaiChat, base("fail"), "x") },
-        EndpointConfig { plugin: "test_auth".into(), ..endpoint("corp", Protocol::OpenaiChat, base("auth"), "m") },
     ];
-    let logins = Arc::new(Mutex::new(0));
-    let gateway = Gateway::in_memory(
-        cfg,
-        Arc::new(MemorySecrets::default()),
-        Arc::new(HeadlessHost),
-        vec![Arc::new(TestAuth { logins: logins.clone() })],
-    )
-    .unwrap();
+    let gateway = Gateway::in_memory(cfg, Arc::new(MemorySecrets::default())).unwrap();
     let gw_port = serve(gateway.router()).await;
-    Env { gw_port, upstream, gateway, logins }
+    Env { gw_port, upstream, gateway }
 }
 
 fn client_request(model: &str, stream: bool) -> Request {
@@ -322,18 +278,6 @@ async fn failover_to_backup_model() {
 }
 
 #[tokio::test]
-async fn plugin_relogin_on_401() {
-    let env = setup().await;
-    let (status, body) = call(&env, Protocol::Anthropic, "corp/m", true).await;
-    assert_eq!(status, 200, "{body}");
-    assert_eq!(*env.logins.lock().unwrap(), 2, "应该先用 token-1 失败，再登录拿 token-2");
-    // 再请求一次不需要重新登录
-    let (status, _) = call(&env, Protocol::Anthropic, "corp/m", false).await;
-    assert_eq!(status, 200);
-    assert_eq!(*env.logins.lock().unwrap(), 2);
-}
-
-#[tokio::test]
 async fn unknown_model_and_listing() {
     let env = setup().await;
     let (status, body) = call(&env, Protocol::Anthropic, "nope", false).await;
@@ -393,11 +337,6 @@ async fn stepwise_test_report() {
     assert_eq!(kinds, vec![("network", "ok"), ("auth", "skip"), ("model", "ok")], "{:?}", r.steps);
     assert!(r.ok);
     assert!(r.steps[2].detail.contains("Hello"));
-
-    // 插件端点：登录这一步会真的去登录
-    let r = env.gateway.test_endpoint_report("corp").await;
-    assert_eq!(r.steps[1].label, "登录");
-    assert_eq!(r.steps[1].status, "ok", "{:?}", r.steps);
 
     // 上游不可达：停在网络这一步
     let mut cfg = (*env.gateway.config()).clone();

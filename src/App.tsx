@@ -12,9 +12,8 @@ import {
   Settings as SettingsIcon,
   TerminalSquare,
 } from "lucide-react";
-import { api, Config, listen, ListedModel, PluginInfo, PromptForm, ServerStatus } from "./api";
+import { api, Config, listen, ListedModel, ServerStatus } from "./api";
 import { CopyButton, StatusDot, ToastProvider, useToast } from "./components/ui";
-import PromptDialog from "./components/PromptDialog";
 import Overview from "./pages/Overview";
 import Endpoints from "./pages/Endpoints";
 import EndpointEditor from "./pages/EndpointEditor";
@@ -43,7 +42,6 @@ interface AppCtx {
   saveConfig: (c: Config) => Promise<void>;
   status: ServerStatus;
   setStatus: (s: ServerStatus) => void;
-  plugins: PluginInfo[];
   models: ListedModel[];
   route: Route;
   go: (r: Route) => void;
@@ -69,10 +67,8 @@ function Shell() {
   const toast = useToast();
   const [config, setConfig] = useState<Config | null>(null);
   const [status, setStatus] = useState<ServerStatus>({ running: false, port: 0, error: null, startedAt: 0 });
-  const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [models, setModels] = useState<ListedModel[]>([]);
   const [route, setRoute] = useState<Route>({ name: "overview" });
-  const [prompt, setPrompt] = useState<{ id: string; form: PromptForm } | null>(null);
   const systemDark = useSystemDark();
   const theme = config?.ui.theme ?? "auto";
   const dark = theme === "dark" || (theme === "auto" && systemDark);
@@ -84,7 +80,6 @@ function Shell() {
   useEffect(() => {
     api.getConfig().then(setConfig).catch((e) => toast(String(e), true));
     api.getStatus().then(setStatus);
-    api.listPlugins().then(setPlugins);
     api.listModels().then(setModels);
   }, [toast]);
 
@@ -92,7 +87,6 @@ function Shell() {
   useEffect(() => {
     const offs: Promise<() => void>[] = [
       listen<ServerStatus | null>("status", (s) => s && setStatus(s)),
-      listen<{ id: string; form: PromptForm }>("plugin-prompt", setPrompt),
       listen<{ title: string; body: string }>("notify", (n) => toast(n.body)),
     ];
     return () => offs.forEach((p) => p.then((f) => f()));
@@ -122,14 +116,13 @@ function Shell() {
         saveConfig,
         status,
         setStatus,
-        plugins,
         models,
         route,
         go,
         dark,
         baseUrl: `http://127.0.0.1:${status.port || config.server.port}`,
       },
-    [config, saveConfig, status, plugins, models, route, go, dark],
+    [config, saveConfig, status, models, route, go, dark],
   );
 
   if (!ctx) return <div className="app" />;
@@ -236,19 +229,6 @@ function Shell() {
           {route.name === "settings" && <SettingsPage />}
         </main>
       </div>
-      {prompt && (
-        <PromptDialog
-          form={prompt.form}
-          onSubmit={(v) => {
-            api.answerPrompt(prompt.id, v);
-            setPrompt(null);
-          }}
-          onCancel={() => {
-            api.answerPrompt(prompt.id, null);
-            setPrompt(null);
-          }}
-        />
-      )}
     </Ctx.Provider>
   );
 }

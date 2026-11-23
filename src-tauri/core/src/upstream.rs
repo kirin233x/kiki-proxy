@@ -2,7 +2,7 @@
 
 use crate::config::{AuthMode, Config, EndpointConfig, ProxyKind, PROXY_DIRECT, PROXY_SYSTEM};
 use crate::ir::Protocol;
-use crate::plugin::{keys, SecretStore};
+use crate::secrets::{keys, SecretStore};
 use anyhow::{anyhow, Result};
 use parking_lot::Mutex;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};

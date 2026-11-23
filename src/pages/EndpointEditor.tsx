@@ -1,15 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, CloudDownload, KeyRound, LogIn, LogOut, Plus, Puzzle, Save, Sparkles, Trash2, Zap } from "lucide-react";
+import { ArrowLeft, CloudDownload, Plus, Save, Sparkles, TerminalSquare, Trash2, Zap } from "lucide-react";
 import {
   api,
   applyModelInfo,
   AuthMode,
-  CredentialStatus,
   EndpointConfig,
   ModelConfig,
   newEndpoint,
   newModel,
-  protocolLabel,
   PROTOCOLS,
   secretKeys,
 } from "../api";
@@ -19,10 +17,24 @@ import { Field, SecretInput, Switch, useToast } from "../components/ui";
 import ContextSelect from "../components/ContextSelect";
 import UpstreamModelsDialog from "../components/UpstreamModelsDialog";
 import TestDialog from "../components/TestDialog";
+import ProcessPanel from "../components/ProcessPanel";
 import { protocolColor, slugify } from "../utils";
 
 /** 常见服务的预设，填上去再改 */
 const PRESETS: { label: string; ep: Partial<EndpointConfig>; models: string[] }[] = [
+  {
+    label: "本地命令行服务（如 cc-proxy）",
+    ep: {
+      id: "internal",
+      name: "内部服务",
+      protocol: "anthropic",
+      baseUrl: "http://127.0.0.1:8787",
+      auth: "none",
+      proxy: "direct",
+      process: { enabled: true, command: "", workdir: "" },
+    },
+    models: [],
+  },
   { label: "Anthropic", ep: { id: "anthropic", name: "Anthropic", protocol: "anthropic", baseUrl: "https://api.anthropic.com" }, models: ["claude-sonnet-4-5", "claude-opus-4-5", "claude-haiku-4-5"] },
   { label: "OpenAI", ep: { id: "openai", name: "OpenAI", protocol: "openai_responses", baseUrl: "https://api.openai.com/v1" }, models: ["gpt-5", "gpt-5-codex"] },
   {
@@ -44,7 +56,7 @@ const AUTH_OPTIONS: { value: AuthMode; label: string }[] = [
 ];
 
 export default function EndpointEditor({ id }: { id: string | null }) {
-  const { config, saveConfig, go, plugins } = useApp();
+  const { config, saveConfig, go } = useApp();
   const toast = useToast();
   const original = id ? config.endpoints.find((e) => e.id === id) : undefined;
   const isNew = !original;
@@ -52,7 +64,6 @@ export default function EndpointEditor({ id }: { id: string | null }) {
   const [idTouched, setIdTouched] = useState(!isNew);
   // 密钥只写不读：这里存的是用户新输入的值
   const [apiKey, setApiKey] = useState("");
-  const [pluginSecrets, setPluginSecrets] = useState<Record<string, string>>({});
   const [flags, setFlags] = useState<Record<string, boolean>>({});
   const [headersText, setHeadersText] = useState(() =>
     Object.entries(ep.headers)
@@ -61,8 +72,6 @@ export default function EndpointEditor({ id }: { id: string | null }) {
   );
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [cred, setCred] = useState<CredentialStatus | null>(null);
-  const [loggingIn, setLoggingIn] = useState(false);
   const [filling, setFilling] = useState(false);
   const [fetching, setFetching] = useState(false);
 
@@ -85,19 +94,12 @@ export default function EndpointEditor({ id }: { id: string | null }) {
     }
   };
 
-  const plugin = plugins.find((p) => p.id === ep.plugin);
   const set = <K extends keyof EndpointConfig>(k: K, v: EndpointConfig[K]) => setEp((e) => ({ ...e, [k]: v }));
 
-  const secretNames = useMemo(
-    () => [secretKeys.apiKey(ep.id), ...(plugin?.settings.filter((s) => s.kind === "secret").map((s) => secretKeys.pluginSecret(ep.id, s.key)) ?? [])],
-    [ep.id, plugin],
-  );
+  const secretNames = useMemo(() => [secretKeys.apiKey(ep.id)], [ep.id]);
   useEffect(() => {
     if (ep.id) api.secretFlags(secretNames).then(setFlags);
   }, [secretNames, ep.id]);
-  useEffect(() => {
-    if (!isNew && plugin?.usesLogin) api.credentialStatus(ep.id).then(setCred);
-  }, [isNew, plugin, ep.id]);
 
   const applyPreset = (p: (typeof PRESETS)[number]) => {
     let pid = p.ep.id!;
@@ -137,9 +139,7 @@ export default function EndpointEditor({ id }: { id: string | null }) {
         routing: { ...config.routing, defaultModel: rename(config.routing.defaultModel) },
       });
       if (apiKey) await api.setSecret(secretKeys.apiKey(next.id), apiKey);
-      for (const [k, v] of Object.entries(pluginSecrets)) if (v) await api.setSecret(secretKeys.pluginSecret(next.id, k), v);
       setApiKey("");
-      setPluginSecrets({});
       api.secretFlags(secretNames).then(setFlags);
       toast(isNew ? `已添加「${next.name}」` : "已保存");
       if (isNew || renamed) go({ name: "endpoint", id: next.id });
@@ -154,18 +154,6 @@ export default function EndpointEditor({ id }: { id: string | null }) {
   const runTest = async () => {
     await save(true);
     setTesting(true);
-  };
-
-  const login = async () => {
-    setLoggingIn(true);
-    try {
-      setCred(await api.loginEndpoint(ep.id));
-      toast("登录成功");
-    } catch (e) {
-      toast(String(e), true);
-    } finally {
-      setLoggingIn(false);
-    }
   };
 
   const updateModel = (i: number, patch: Partial<ModelConfig>) => set("models", ep.models.map((m, j) => (j === i ? { ...m, ...patch } : m)));
@@ -234,123 +222,33 @@ export default function EndpointEditor({ id }: { id: string | null }) {
               />
             </Field>
             <div className="span-2">
-              <Field label="类型">
+              <Field label="协议" help="上游服务说的是哪种 API 格式。客户端用什么格式都可以，kiki-proxy 会自动转换">
                 <div className="proto-pick">
                   {PROTOCOLS.map((p) => (
-                    <button
-                      key={p.value}
-                      className={!ep.plugin && ep.protocol === p.value ? "on" : ""}
-                      onClick={() => setEp((x) => ({ ...x, protocol: p.value, plugin: "" }))}
-                    >
+                    <button key={p.value} className={ep.protocol === p.value ? "on" : ""} onClick={() => set("protocol", p.value)}>
                       <i style={{ background: protocolColor[p.value] }} />
                       <b>{p.label}</b>
                       <span>{p.hint}</span>
                     </button>
                   ))}
-                  {plugins.map((p) => (
-                    <button
-                      key={p.id}
-                      className={`plugin ${ep.plugin === p.id ? "on" : ""}`}
-                      onClick={() => setEp((x) => ({ ...x, plugin: p.id, protocol: p.protocol, baseUrl: x.baseUrl || p.defaultBaseUrl }))}
-                    >
-                      <i style={{ background: "var(--accent)" }} />
-                      <b>{p.name}</b>
-                      <span>
-                        插件 · {protocolLabel(p.protocol)} 格式{p.usesLogin ? " · 需要登录" : ""}
-                      </span>
-                    </button>
-                  ))}
                 </div>
               </Field>
             </div>
-            {ep.plugin && !plugin && (
-              <div className="span-2 banner err">这个端点使用的插件「{ep.plugin}」没有编译进当前版本</div>
-            )}
-            {plugin && (
-              <div className="span-2 plugin-block">
-                {plugin.description && (
-                  <div className="plugin-desc">
-                    <Puzzle size={15} />
-                    {plugin.description}
-                  </div>
-                )}
-                <div className="form-grid">
-                  {plugin.settings.map((f) => (
-                    <div key={f.key} className={f.kind === "multiline" ? "span-2" : ""}>
-                      <Field label={f.label} help={f.help} required={f.required}>
-                        {f.kind === "secret" ? (
-                          <SecretInput
-                            isSet={!!flags[secretKeys.pluginSecret(ep.id, f.key)]}
-                            value={pluginSecrets[f.key] ?? ""}
-                            onChange={(v) => setPluginSecrets({ ...pluginSecrets, [f.key]: v })}
-                          />
-                        ) : f.kind === "multiline" ? (
-                          <textarea
-                            className="textarea mono"
-                            rows={4}
-                            value={ep.pluginSettings[f.key] ?? f.default}
-                            onChange={(e) => set("pluginSettings", { ...ep.pluginSettings, [f.key]: e.target.value })}
-                          />
-                        ) : (
-                          <input
-                            className={`input ${f.kind === "url" ? "mono" : ""}`}
-                            value={ep.pluginSettings[f.key] ?? f.default}
-                            placeholder={f.default}
-                            onChange={(e) => set("pluginSettings", { ...ep.pluginSettings, [f.key]: e.target.value })}
-                          />
-                        )}
-                      </Field>
-                    </div>
-                  ))}
-                </div>
-                {plugin.usesLogin && (
-                  <div className={`login-box ${cred?.error ? "err" : ""}`}>
-                    <KeyRound size={18} />
-                    <div className="login-text">
-                      <b>{isNew ? "保存后登录" : cred?.loggedIn ? (cred.expired ? "登录已过期" : "已登录") : "未登录"}</b>
-                      <span>
-                        {cred?.error
-                          ? `上次登录 / 续期失败：${cred.error}`
-                          : cred?.loggedIn && cred.expiresAt
-                            ? `${new Date(cred.expiresAt * 1000).toLocaleString("zh-CN")} 到期，到期前会在后台自动续期`
-                            : "App 启动时会自动打开登录；登录后 token 存在钥匙串里，到期前自动续期"}
-                      </span>
-                    </div>
-                    {cred?.loggedIn && (
-                      <button
-                        className="btn btn-sm"
-                        onClick={async () => {
-                          await api.logoutEndpoint(ep.id);
-                          setCred(await api.credentialStatus(ep.id));
-                        }}
-                      >
-                        <LogOut size={14} />
-                        退出
-                      </button>
-                    )}
-                    {!isNew && (
-                      <button className="btn btn-sm btn-primary" onClick={login} disabled={loggingIn}>
-                        <LogIn size={14} />
-                        {loggingIn ? "登录中…" : cred?.loggedIn ? "重新登录" : "登录"}
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
             <div className="span-2">
-              <Field label="地址" required help={plugin ? `内部服务的接口地址（${protocolLabel(plugin.protocol)} 格式）` : "带不带 /v1 都可以，例如 https://api.deepseek.com 或 https://api.openai.com/v1"}>
+              <Field
+                label="地址"
+                required
+                help={ep.process.enabled ? "本地程序监听的地址，例如 http://127.0.0.1:8787" : "带不带 /v1 都可以，例如 https://api.deepseek.com 或 https://api.openai.com/v1"}
+              >
                 <input className="input mono" value={ep.baseUrl} placeholder="https://" onChange={(e) => set("baseUrl", e.target.value.trim())} />
               </Field>
             </div>
-            {!plugin && (
-              <>
             <Field label="API Key" help="保存在 macOS 钥匙串里，不会写进配置文件">
               <SecretInput
                 isSet={!!flags[secretKeys.apiKey(ep.id)]}
                 value={apiKey}
                 onChange={setApiKey}
-                placeholder={ep.plugin ? "由插件负责鉴权时可留空" : "sk-..."}
+                placeholder={ep.process.enabled ? "本地程序自己负责登录的话留空" : "sk-..."}
                 onClear={async () => {
                   await api.setSecret(secretKeys.apiKey(ep.id), "");
                   api.secretFlags(secretNames).then(setFlags);
@@ -366,8 +264,6 @@ export default function EndpointEditor({ id }: { id: string | null }) {
                 ))}
               </select>
             </Field>
-              </>
-            )}
             <Field label="出口" help="访问这个端点走哪条线路，可在「出口代理」里添加">
               <select className="select" value={ep.proxy} onChange={(e) => set("proxy", e.target.value)}>
                 <option value="system">跟随系统代理</option>
@@ -384,6 +280,47 @@ export default function EndpointEditor({ id }: { id: string | null }) {
                 <Switch on={ep.enabled} onChange={(v) => set("enabled", v)} />
               </div>
             </Field>
+          </div>
+        </div>
+
+        {/* ---------------------------------------------------------------- 本地程序 */}
+        <div className="settings-group">
+          <h3>
+            本地程序
+            <span className="h3-hint">由 kiki-proxy 启动并守护一个命令行服务（比如公司内部服务的代理），它负责登录和格式转换</span>
+          </h3>
+          <div className="panel">
+            <div className="setting-row">
+              <div className="setting-text">
+                <b>
+                  <TerminalSquare size={14} /> 由 kiki-proxy 启动这个端点背后的程序
+                </b>
+                <span>App 启动时自动运行，挂了自动重启，退出 App 时一起结束；程序自己弹出的浏览器登录照常工作</span>
+              </div>
+              <Switch on={ep.process.enabled} onChange={(v) => set("process", { ...ep.process, enabled: v })} />
+            </div>
+            {ep.process.enabled && (
+              <div className="process-form">
+                <Field label="启动命令" required help="和在终端里敲的一样，可以带参数，也可以写成多行（比如先 export 再运行）。用登录 shell 执行，能用到你终端里的 PATH">
+                  <textarea
+                    className="textarea mono"
+                    rows={2}
+                    value={ep.process.command}
+                    placeholder="~/bin/cc-proxy --port 8787"
+                    onChange={(e) => set("process", { ...ep.process, command: e.target.value })}
+                  />
+                </Field>
+                <Field label="工作目录" help="留空为用户目录">
+                  <input
+                    className="input mono"
+                    value={ep.process.workdir}
+                    placeholder="~"
+                    onChange={(e) => set("process", { ...ep.process, workdir: e.target.value })}
+                  />
+                </Field>
+                {!isNew && original?.process.enabled && <ProcessPanel endpointId={ep.id} dirty={JSON.stringify(original.process) !== JSON.stringify(ep.process)} />}
+              </div>
+            )}
           </div>
         </div>
 
@@ -583,10 +520,7 @@ export default function EndpointEditor({ id }: { id: string | null }) {
       {testing && (
         <TestDialog
           endpoint={ep}
-          onClose={() => {
-            setTesting(false);
-            if (plugin?.usesLogin) api.credentialStatus(ep.id).then(setCred);
-          }}
+          onClose={() => setTesting(false)}
         />
       )}
       {fetching && (

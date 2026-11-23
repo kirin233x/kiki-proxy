@@ -1,6 +1,6 @@
 // 浏览器预览用的假数据（没有 Tauri 时）。只用于调试界面。
 
-import type { Config, LogRecord, Stats, UsageRow, DailyRow, PluginInfo, ClientInfo } from "./api";
+import type { Config, LogRecord, Stats, UsageRow, DailyRow, ClientInfo } from "./api";
 
 const listeners = new Map<string, Set<(p: unknown) => void>>();
 
@@ -34,12 +34,11 @@ let config: Config = {
       id: "internal",
       name: "内部模型服务",
       enabled: true,
-      protocol: "openai_chat",
-      baseUrl: "https://llm.corp.example/v1",
+      protocol: "anthropic",
+      baseUrl: "http://127.0.0.1:8787",
       auth: "none",
       proxy: "direct",
-      plugin: "corp_example",
-      pluginSettings: { login_url: "https://sso.corp.example/login", token_url: "https://sso.corp.example/token" },
+      process: { enabled: true, command: "~/bin/cc-proxy --port 8787", workdir: "" },
       headers: {},
       timeoutSecs: 300,
       compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
@@ -58,8 +57,7 @@ let config: Config = {
       baseUrl: "https://api.anthropic.com",
       auth: "auto",
       proxy: "clash",
-      plugin: "",
-      pluginSettings: {},
+      process: { enabled: false, command: "", workdir: "" },
       headers: {},
       timeoutSecs: 300,
       compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
@@ -78,8 +76,7 @@ let config: Config = {
       baseUrl: "https://api.deepseek.com",
       auth: "auto",
       proxy: "direct",
-      plugin: "",
-      pluginSettings: {},
+      process: { enabled: false, command: "", workdir: "" },
       headers: {},
       timeoutSecs: 300,
       compat: { sendReasoningContent: true, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
@@ -98,8 +95,7 @@ let config: Config = {
       baseUrl: "https://generativelanguage.googleapis.com",
       auth: "auto",
       proxy: "clash",
-      plugin: "",
-      pluginSettings: {},
+      process: { enabled: false, command: "", workdir: "" },
       headers: {},
       timeoutSecs: 300,
       compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },
@@ -205,21 +201,6 @@ function stats(days: number): Stats {
   return { total, byModel, byEndpoint: usageRows("endpointId"), daily };
 }
 
-const plugins: PluginInfo[] = [
-  {
-    id: "corp_example",
-    name: "公司内部服务（示例）",
-    description: "OpenAI Chat 格式 + 网页登录 + 自动续期。复制 src-tauri/core/src/plugins/example.rs 改成你们的真实逻辑。",
-    usesLogin: true,
-    protocol: "openai_chat",
-    defaultBaseUrl: "https://llm.corp.example/v1",
-    settings: [
-      { key: "login_url", label: "登录页地址", help: "打开这个网页登录，登录后会跳回 kiki-proxy", kind: "url", default: "", required: true },
-      { key: "token_url", label: "Token 接口", help: "用登录拿到的 code 换 token，也用来续期", kind: "url", default: "", required: true },
-      { key: "callback_port", label: "回调端口", help: "登录页要求固定回调端口时填写，否则留空", kind: "text", default: "", required: false },
-    ],
-  },
-];
 
 const clients: ClientInfo[] = [
   { id: "claude", name: "Claude Code", path: "~/.claude/settings.json", connected: true, hasBackup: true, model: "internal/sonnet", maxContextTokens: 0 },
@@ -228,7 +209,6 @@ const clients: ClientInfo[] = [
 ];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-let loggedIn = false;
 
 // 模拟实时请求
 setInterval(() => {
@@ -289,40 +269,35 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
       if (args.value) secrets.add(args.key);
       else secrets.delete(args.key);
       return r(null);
-    case "list_plugins":
-      return r(plugins);
-    case "credential_status":
-      return r({ loggedIn, expiresAt: loggedIn ? Math.floor(Date.now() / 1000) + 7200 : null, expired: false });
-    case "login_endpoint": {
-      const id = "p1";
-      const answer = new Promise<Record<string, string> | null>((res) => {
-        pendingPrompt = res;
+    case "process_status":
+      if (args.id !== "internal") return r(null);
+      return r({
+        state: processRunning ? "running" : "restarting",
+        pid: processRunning ? 48213 : null,
+        startedAt: now - 2 * 3600_000,
+        restarts: 1,
+        lastExit: "程序退出，退出码 1",
+        command: "~/bin/cc-proxy --port 8787",
+        logs: [
+          "[kiki-proxy 01:12:40] 启动：~/bin/cc-proxy --port 8787",
+          "cc-proxy v0.4.2",
+          "需要登录，正在打开浏览器…",
+          "登录成功，token 有效期 8 小时",
+          "listening on http://127.0.0.1:8787",
+          "POST /v1/messages model=claude-sonnet-4-5 200 1.8s",
+          "POST /v1/messages model=claude-sonnet-4-5 200 3.2s",
+          "token 将在 5 分钟后过期，正在续期…",
+          "续期成功",
+        ],
       });
-      emit("plugin-prompt", {
-        id,
-        form: {
-          title: "登录「内部模型服务」",
-          message: "请输入内部账号和动态验证码，登录后 kiki-proxy 会自动续期。",
-          submitText: "登录",
-          fields: [
-            { key: "username", label: "账号", kind: "text", placeholder: "", default: "kirin" },
-            { key: "password", label: "密码", kind: "password", placeholder: "", default: "" },
-            { key: "otp", label: "验证码", kind: "code", placeholder: "6 位数字", default: "" },
-          ],
-        },
-      });
-      const v = await answer;
-      if (!v) throw "已取消登录";
-      loggedIn = true;
-      return r({ loggedIn: true, expiresAt: Math.floor(Date.now() / 1000) + 7200, expired: false });
-    }
-    case "answer_prompt":
-      pendingPrompt?.(args.values);
-      pendingPrompt = null;
+    case "restart_process":
+      processRunning = false;
+      setTimeout(() => (processRunning = true), 1500);
       return r(null);
-    case "logout_endpoint":
-      loggedIn = false;
-      return r(null);
+    case "export_desktop_config":
+      return r("/Users/kirin/Downloads/kiki-proxy-claude-desktop.json");
+    case "desktop_connected":
+      return r(false);
     case "test_endpoint":
       await sleep(700);
       return r(
@@ -343,8 +318,8 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
       if (args.step === "auth") {
         await sleep(700);
         return r(
-          ep.plugin
-            ? { kind: "auth", label: "登录", status: "ok", detail: "已登录，2 小时后到期，会自动续期", ms: 0 }
+          ep.process.enabled
+            ? { kind: "auth", label: "鉴权", status: "skip", detail: "没有配置 API Key（服务不需要的话可以忽略）", ms: 0 }
             : { kind: "auth", label: "鉴权", status: "ok", detail: "已配置 API Key，下一步实际调用模型时验证", ms: 0 },
         );
       }
@@ -363,8 +338,8 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
         return r({ ok: false, steps: [{ kind: "network", label: "网络", status: "fail", detail: "经Clash访问 generativelanguage.googleapis.com 失败：连接失败：Connection refused", ms: 3 }] });
       const steps: any[] = [{ kind: "network", label: "网络", status: "ok", detail: `经${ep.proxy === "direct" ? "直连" : "Clash"}访问 ${new URL(ep.baseUrl).host} 正常`, ms: 42 }];
       steps.push(
-        ep.plugin
-          ? { kind: "auth", label: "登录", status: "ok", detail: "已登录，2 小时后到期，会自动续期", ms: 0 }
+        ep.process.enabled
+          ? { kind: "auth", label: "鉴权", status: "skip", detail: "没有配置 API Key（服务不需要的话可以忽略）", ms: 0 }
           : { kind: "auth", label: "鉴权", status: "ok", detail: "已配置 API Key，下一步实际调用模型时验证", ms: 0 },
       );
       ep.models.filter((m) => m.enabled).forEach((m, i) =>
@@ -460,7 +435,6 @@ export async function mockInvoke<T>(cmd: string, args: Record<string, any> = {})
   throw new Error(`mock: 未实现的命令 ${cmd}`);
 }
 
-let pendingPrompt: ((v: Record<string, string> | null) => void) | null = null;
 
 let pricingLoaded = true;
 const P = (input: number, output: number, cacheRead: number, cacheWrite: number, contextWindow: number, vision: boolean, matched: string, provider: string) => ({
@@ -476,3 +450,5 @@ const PRICES: Record<string, ReturnType<typeof P>> = {
   "deepseek-reasoner": P(0.28, 0.42, 0.028, 0, 131072, false, "deepseek/deepseek-reasoner", "deepseek"),
   "gemini-2.5-pro": P(1.25, 10, 0.125, 0, 1048576, true, "gemini/gemini-2.5-pro", "gemini"),
 };
+
+let processRunning = true;

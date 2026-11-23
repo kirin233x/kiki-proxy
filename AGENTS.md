@@ -2,13 +2,9 @@
 
 kiki-proxy 是一个 macOS 菜单栏里的本地 AI 网关（Tauri 2 + Rust + React）。项目结构见 [README.md](README.md)。
 
-## 如果你的任务是适配一个内部服务（写插件）
-
-**先完整阅读 [src-tauri/core/src/plugins/README.md](src-tauri/core/src/plugins/README.md)**，按里面的步骤做。要点：
-
-- 只新增 `src-tauri/core/src/plugins/<名字>.rs`、`src-tauri/core/tests/plugin_<名字>.rs`，并在 `plugins/mod.rs` 注册一行。
-- 不要修改框架代码（协议转换、网关、路由等）。
-- 从复制 `plugins/example.rs` 和 `tests/plugin_example.rs` 开始。
+- `src-tauri/core`：网关引擎（协议转换、路由、故障切换、本地程序托管、日志），不依赖 Tauri，改完跑测试。
+- `src-tauri/src/lib.rs`：Tauri 外壳和给前端调用的命令。
+- `src/`：界面（React），在浏览器里 `npm run dev` 会使用 `src/mock.ts` 的假数据。改了前后端共用的配置结构时，记得同步 `src/api.ts`、`src/mock.ts`，并更新 `src-tauri/core/tests/frontend_config.json`。
 
 ## 常用命令
 

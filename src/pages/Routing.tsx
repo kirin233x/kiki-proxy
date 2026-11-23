@@ -6,7 +6,7 @@ import ModelInput, { ModelChain } from "../components/ModelInput";
 import { Switch, useToast } from "../components/ui";
 
 export default function Routing() {
-  const { config, saveConfig, go, plugins } = useApp();
+  const { config, saveConfig, go } = useApp();
   const toast = useToast();
   const [draft, setDraft] = useState<Config>(() => structuredClone(config));
   const dirty = JSON.stringify(draft) !== JSON.stringify(config);
@@ -45,7 +45,7 @@ export default function Routing() {
     const prefix = target.split("/")[0];
     const ep = draft.endpoints.find((e) => e.id === prefix);
     if (!ep) return <span className="dest-bad">找不到端点「{prefix}」</span>;
-    const typeName = plugins.find((p) => p.id === ep.plugin)?.name;
+    const typeName = ep.process.enabled ? "本地程序" : "";
     return (
       <span className="dest">
         <b>{ep.name}</b>

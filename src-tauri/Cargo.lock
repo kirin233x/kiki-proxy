@@ -2316,11 +2316,11 @@ name = "kiki-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "axum",
  "base64 0.22.1",
  "bytes",
  "futures",
+ "libc",
  "parking_lot",
  "reqwest 0.12.28",
  "rusqlite",
@@ -2339,7 +2339,6 @@ name = "kiki-proxy"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "keyring",
  "kiki-core",
  "serde",
@@ -2349,7 +2348,6 @@ dependencies = [
  "tauri-plugin-autostart",
  "tauri-plugin-opener",
  "tokio",
- "uuid",
 ]
 
 [[package]]

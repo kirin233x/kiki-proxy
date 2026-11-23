@@ -240,10 +240,8 @@ pub struct EndpointConfig {
     pub auth: AuthMode,
     /// 出口：`direct`、`system` 或某个代理的 id
     pub proxy: String,
-    /// 编译进 App 的插件 id
-    pub plugin: String,
-    /// 插件的非敏感设置（敏感的在钥匙串里）
-    pub plugin_settings: BTreeMap<String, String>,
+    /// 由 kiki-proxy 启动并守护的本地程序（比如公司内部服务的命令行代理）
+    pub process: ProcessConfig,
     /// 额外附加的请求头
     pub headers: BTreeMap<String, String>,
     /// 等待上游返回响应头的最长时间
@@ -265,8 +263,7 @@ impl Default for EndpointConfig {
             base_url: String::new(),
             auth: AuthMode::Auto,
             proxy: PROXY_SYSTEM.into(),
-            plugin: String::new(),
-            plugin_settings: BTreeMap::new(),
+            process: ProcessConfig::default(),
             headers: BTreeMap::new(),
             timeout_secs: 300,
             compat: Compat::default(),
@@ -275,6 +272,16 @@ impl Default for EndpointConfig {
             note: String::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ProcessConfig {
+    pub enabled: bool,
+    /// 启动命令，和在终端里敲的一样（通过登录 shell 执行）
+    pub command: String,
+    /// 工作目录，可以用 ~；留空为用户目录
+    pub workdir: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

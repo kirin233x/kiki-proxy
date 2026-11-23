@@ -1,23 +1,21 @@
 //! Tauri 外壳：钥匙串、插件弹窗、菜单栏图标，以及给前端调用的命令。
 
-use async_trait::async_trait;
-use kiki_core::auth::CredentialStatus;
 use kiki_core::clients::{self, ApplyOptions, ClientInfo};
 use kiki_core::config::Config;
-use kiki_core::gateway::{PluginInfo, ServerStatus, TestResult};
-use kiki_core::plugin::{Host, PromptForm, SecretStore};
+use kiki_core::gateway::{ServerStatus, TestResult};
+use kiki_core::process::ProcessStatus;
+use kiki_core::secrets::SecretStore;
 use kiki_core::router::ListedModel;
 use kiki_core::store::{LogBodies, LogQuery, LogRecord, Stats};
 use kiki_core::Gateway;
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_opener::OpenerExt;
-use tokio::sync::oneshot;
 
 type CmdResult<T> = Result<T, String>;
 
@@ -52,28 +50,6 @@ impl SecretStore for Keychain {
     }
 }
 
-// ------------------------------------------------------------------ 插件宿主
-
-type Answer = Option<BTreeMap<String, String>>;
-
-struct TauriHost {
-    app: AppHandle,
-    pending: Mutex<HashMap<String, oneshot::Sender<Answer>>>,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PromptEvent {
-    id: String,
-    form: PromptForm,
-}
-
-#[derive(Clone, Serialize)]
-struct NotifyEvent {
-    title: String,
-    body: String,
-}
-
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -82,35 +58,8 @@ fn show_main(app: &AppHandle) {
     }
 }
 
-#[async_trait]
-impl Host for TauriHost {
-    async fn open_url(&self, url: &str) -> anyhow::Result<()> {
-        self.app.opener().open_url(url, None::<&str>)?;
-        Ok(())
-    }
-
-    async fn prompt(&self, form: PromptForm) -> anyhow::Result<Answer> {
-        let id = uuid::Uuid::new_v4().to_string();
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().unwrap().insert(id.clone(), tx);
-        show_main(&self.app);
-        self.app.emit("plugin-prompt", PromptEvent { id: id.clone(), form })?;
-        let answer = tokio::time::timeout(std::time::Duration::from_secs(600), rx).await;
-        self.pending.lock().unwrap().remove(&id);
-        match answer {
-            Ok(Ok(a)) => Ok(a),
-            _ => anyhow::bail!("登录表单超时未填写"),
-        }
-    }
-
-    fn notify(&self, title: &str, body: &str) {
-        let _ = self.app.emit("notify", NotifyEvent { title: title.into(), body: body.into() });
-    }
-}
-
 struct AppState {
     gateway: Gateway,
-    host: Arc<TauriHost>,
 }
 
 // ------------------------------------------------------------------ 配置与服务
@@ -199,33 +148,16 @@ fn set_secret(state: State<AppState>, key: String, value: String) -> CmdResult<(
     Ok(())
 }
 
-// ------------------------------------------------------------------ 插件与登录
+// ------------------------------------------------------------------ 本地程序
 
 #[tauri::command]
-fn list_plugins(state: State<AppState>) -> Vec<PluginInfo> {
-    state.gateway.plugins()
+fn process_status(state: State<AppState>, id: String) -> Option<ProcessStatus> {
+    state.gateway.process_status(&id)
 }
 
 #[tauri::command]
-async fn login_endpoint(state: State<'_, AppState>, id: String) -> CmdResult<CredentialStatus> {
-    state.gateway.login(&id).await.map_err(err)
-}
-
-#[tauri::command]
-fn logout_endpoint(state: State<AppState>, id: String) {
-    state.gateway.logout(&id)
-}
-
-#[tauri::command]
-fn credential_status(state: State<AppState>, id: String) -> CredentialStatus {
-    state.gateway.credential_status(&id)
-}
-
-#[tauri::command]
-fn answer_prompt(state: State<AppState>, id: String, values: Option<BTreeMap<String, String>>) {
-    if let Some(tx) = state.host.pending.lock().unwrap().remove(&id) {
-        let _ = tx.send(values);
-    }
+fn restart_process(state: State<AppState>, id: String) {
+    state.gateway.restart_process(&id)
 }
 
 // ------------------------------------------------------------------ 价格表与上游模型
@@ -329,6 +261,19 @@ fn apply_client(state: State<AppState>, client: String, options: ApplyOptions) -
 }
 
 #[tauri::command]
+fn export_desktop_config(app: AppHandle, state: State<AppState>, models: Vec<clients::DesktopModel>) -> CmdResult<String> {
+    let cfg = state.gateway.config();
+    let p = clients::write_desktop_config(cfg.server.port, &cfg.server.access_key, &models).map_err(err)?;
+    let _ = app.opener().reveal_item_in_dir(&p);
+    Ok(p.display().to_string())
+}
+
+#[tauri::command]
+fn desktop_connected(state: State<AppState>) -> bool {
+    clients::desktop_connected(state.gateway.config().server.port)
+}
+
+#[tauri::command]
 fn restore_client(client: String) -> CmdResult<()> {
     clients::restore(&client).map_err(err)
 }
@@ -391,6 +336,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
                     if let Some(s) = app.try_state::<AppState>() {
+                        s.gateway.shutdown_processes();
                         s.gateway.stop().await;
                     }
                     app.exit(0);
@@ -432,9 +378,8 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             let dir = app.path().app_data_dir()?;
-            let host = Arc::new(TauriHost { app: handle.clone(), pending: Mutex::new(HashMap::new()) });
-            let gateway = Gateway::new(&dir, Arc::new(Keychain), host.clone()).map_err(|e| e.to_string())?;
-            app.manage(AppState { gateway: gateway.clone(), host });
+            let gateway = Gateway::new(&dir, Arc::new(Keychain)).map_err(|e| e.to_string())?;
+            app.manage(AppState { gateway: gateway.clone() });
 
             // 实时日志推给前端
             let mut rx = gateway.subscribe();
@@ -489,11 +434,6 @@ pub fn run() {
             explain_route,
             secret_flags,
             set_secret,
-            list_plugins,
-            login_endpoint,
-            logout_endpoint,
-            credential_status,
-            answer_prompt,
             test_endpoint,
             test_endpoint_report,
             test_step,
@@ -509,6 +449,10 @@ pub fn run() {
             list_clients,
             apply_client,
             restore_client,
+            export_desktop_config,
+            desktop_connected,
+            process_status,
+            restart_process,
             get_autostart,
             set_autostart,
         ])
@@ -519,6 +463,12 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = event {
                 show_main(app);
+            }
+            // 不管怎么退出（菜单、Cmd+Q、系统关机），都把托管的本地程序一起结束
+            if let tauri::RunEvent::Exit = event {
+                if let Some(s) = app.try_state::<AppState>() {
+                    s.gateway.shutdown_processes();
+                }
             }
             let _ = (app, event);
         });

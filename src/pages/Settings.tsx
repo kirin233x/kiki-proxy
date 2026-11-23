@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
-import { Download, FolderOpen, Monitor, Moon, Puzzle, RefreshCw, Sun, Upload } from "lucide-react";
+import { Download, FolderOpen, Monitor, Moon, RefreshCw, Sun, Upload } from "lucide-react";
 import { api, Config, PricingStatus } from "../api";
 import { fmtAgo } from "../utils";
 import { useApp } from "../App";
 import { Confirm, Modal, SecretInput, Switch, useToast } from "../components/ui";
 
 export default function SettingsPage() {
-  const { config, saveConfig, plugins } = useApp();
+  const { config, saveConfig } = useApp();
   const toast = useToast();
   const [autostart, setAutostart] = useState(false);
   const [port, setPort] = useState(String(config.server.port));
@@ -277,30 +277,6 @@ export default function SettingsPage() {
         </div>
 
         <PricingSection />
-
-        <div className="settings-group">
-          <h3>已编译的插件</h3>
-          <div className="panel">
-            {plugins.map((p) => (
-              <div key={p.id} className="setting-row">
-                <div className="setting-text">
-                  <b>
-                    <Puzzle size={13} /> {p.name} <code className="mono-sm">{p.id}</code>
-                  </b>
-                  <span>{p.description}</span>
-                </div>
-                <span className="muted-sm">{config.endpoints.filter((e) => e.plugin === p.id).length} 个端点在用</span>
-              </div>
-            ))}
-            <div className="setting-row">
-              <div className="setting-text">
-                <span>
-                  新插件写在 <code>src-tauri/core/src/plugins/</code>，在 <code>plugins/mod.rs</code> 里注册后重新构建 App。
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
 
         <div className="about">
           <div className="brand-logo">k</div>

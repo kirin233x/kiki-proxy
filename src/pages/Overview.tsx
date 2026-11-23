@@ -3,10 +3,11 @@ import { Activity, ArrowRight, Coins, Gauge, Plus, Radio, RefreshCw, Server, Zap
 import { api, listen, LogRecord, protocolLabel, Stats, TestResult } from "../api";
 import { useApp } from "../App";
 import { CopyButton, Empty, StatusDot } from "../components/ui";
+import { ProcessBadge } from "../components/ProcessPanel";
 import { fmtCost, fmtMs, fmtNum, fmtTime, protocolColor, statusTone } from "../utils";
 
 export default function Overview() {
-  const { config, status, go, baseUrl, plugins } = useApp();
+  const { config, status, go, baseUrl } = useApp();
   const [stats, setStats] = useState<Stats | null>(null);
   const [recent, setRecent] = useState<LogRecord[]>([]);
   const [health, setHealth] = useState<Record<string, TestResult | "busy">>({});
@@ -157,7 +158,7 @@ export default function Overview() {
               <button key={e.id} className={`ep-card ${e.enabled ? "" : "off"}`} onClick={() => go({ name: "endpoint", id: e.id })}>
                 <div className="ep-card-top">
                   <span className="proto-tag" style={{ ["--c" as string]: protocolColor[e.protocol], ["--cb" as string]: protocolColor[e.protocol] + "1f" }}>
-                    {plugins.find((p) => p.id === e.plugin)?.name ?? protocolLabel(e.protocol)}
+                    {protocolLabel(e.protocol)}
                   </span>
                   {h === "busy" ? (
                     <StatusDot tone="busy" />
@@ -181,6 +182,7 @@ export default function Overview() {
                     {proxyName}
                   </span>
                   {e.fallbacks.length > 0 && <span>↪ {e.fallbacks.length} 个备选</span>}
+                  {e.process.enabled && e.enabled && <ProcessBadge endpointId={e.id} />}
                 </div>
               </button>
             );

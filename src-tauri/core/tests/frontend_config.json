@@ -48,14 +48,14 @@
       "id": "internal",
       "name": "内部模型服务",
       "enabled": true,
-      "protocol": "openai_chat",
-      "baseUrl": "https://llm.corp.example/v1",
+      "protocol": "anthropic",
+      "baseUrl": "http://127.0.0.1:8787",
       "auth": "none",
       "proxy": "direct",
-      "plugin": "corp_example",
-      "pluginSettings": {
-        "login_url": "https://sso.corp.example/login",
-        "token_url": "https://sso.corp.example/token"
+      "process": {
+        "enabled": true,
+        "command": "~/bin/cc-proxy --port 8787",
+        "workdir": ""
       },
       "headers": {},
       "timeoutSecs": 300,
@@ -111,8 +111,11 @@
       "baseUrl": "https://api.anthropic.com",
       "auth": "auto",
       "proxy": "clash",
-      "plugin": "",
-      "pluginSettings": {},
+      "process": {
+        "enabled": false,
+        "command": "",
+        "workdir": ""
+      },
       "headers": {},
       "timeoutSecs": 300,
       "compat": {
@@ -164,8 +167,11 @@
       "baseUrl": "https://api.deepseek.com",
       "auth": "auto",
       "proxy": "direct",
-      "plugin": "",
-      "pluginSettings": {},
+      "process": {
+        "enabled": false,
+        "command": "",
+        "workdir": ""
+      },
       "headers": {},
       "timeoutSecs": 300,
       "compat": {
@@ -217,8 +223,11 @@
       "baseUrl": "https://generativelanguage.googleapis.com",
       "auth": "auto",
       "proxy": "clash",
-      "plugin": "",
-      "pluginSettings": {},
+      "process": {
+        "enabled": false,
+        "command": "",
+        "workdir": ""
+      },
       "headers": {},
       "timeoutSecs": 300,
       "compat": {

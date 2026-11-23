@@ -48,14 +48,32 @@ export interface EndpointConfig {
   baseUrl: string;
   auth: AuthMode;
   proxy: string;
-  plugin: string;
-  pluginSettings: Record<string, string>;
+  /** 由 kiki-proxy 启动并守护的本地程序（比如公司内部服务的命令行代理） */
+  process: ProcessConfig;
   headers: Record<string, string>;
   timeoutSecs: number;
   compat: Compat;
   models: ModelConfig[];
   fallbacks: string[];
   note: string;
+}
+
+export interface ProcessConfig {
+  enabled: boolean;
+  /** 启动命令，和在终端里敲的一样 */
+  command: string;
+  /** 工作目录，可以用 ~ */
+  workdir: string;
+}
+
+export interface ProcessStatus {
+  state: "running" | "starting" | "restarting" | "stopped" | "failed";
+  pid: number | null;
+  startedAt: number;
+  restarts: number;
+  lastExit: string;
+  command: string;
+  logs: string[];
 }
 
 export interface ProxyConfig {
@@ -95,26 +113,6 @@ export interface ServerStatus {
   startedAt: number;
 }
 
-export interface SettingField {
-  key: string;
-  label: string;
-  help: string;
-  kind: "text" | "secret" | "url" | "multiline";
-  default: string;
-  required: boolean;
-}
-
-export interface PluginInfo {
-  id: string;
-  name: string;
-  description: string;
-  settings: SettingField[];
-  usesLogin: boolean;
-  /** 内部服务的接口格式 */
-  protocol: Protocol;
-  defaultBaseUrl: string;
-}
-
 export interface TestStep {
   kind: "network" | "auth" | "model";
   label: string;
@@ -126,13 +124,6 @@ export interface TestStep {
 export interface TestReport {
   ok: boolean;
   steps: TestStep[];
-}
-
-export interface CredentialStatus {
-  loggedIn: boolean;
-  expiresAt: number | null;
-  expired: boolean;
-  error?: string | null;
 }
 
 export interface TestResult {
@@ -239,6 +230,12 @@ export interface ClientInfo {
   maxContextTokens: number;
 }
 
+export interface DesktopModel {
+  name: string;
+  label: string;
+  supports1m: boolean;
+}
+
 export interface ApplyOptions {
   model: string;
   smallModel: string;
@@ -283,27 +280,10 @@ export interface RouteHop {
   rule: string;
 }
 
-export interface PromptField {
-  key: string;
-  label: string;
-  kind: "text" | "password" | "code";
-  placeholder: string;
-  default: string;
-}
-
-export interface PromptForm {
-  title: string;
-  message: string;
-  fields: PromptField[];
-  submitText: string;
-  image?: string | null;
-}
-
-// ------------------------------------------------------------------ 钥匙串里的密钥名（与 Rust 端 plugin::keys 一致）
+// ------------------------------------------------------------------ 钥匙串里的密钥名（与 Rust 端 secrets::keys 一致）
 
 export const secretKeys = {
   apiKey: (ep: string) => `endpoint/${ep}/api_key`,
-  pluginSecret: (ep: string, key: string) => `endpoint/${ep}/plugin/${key}`,
   proxyPassword: (id: string) => `proxy/${id}/password`,
 };
 
@@ -338,11 +318,8 @@ export const api = {
   secretFlags: (keys: string[]) => invoke<Record<string, boolean>>("secret_flags", { keys }),
   setSecret: (key: string, value: string) => invoke<void>("set_secret", { key, value }),
 
-  listPlugins: () => invoke<PluginInfo[]>("list_plugins"),
-  loginEndpoint: (id: string) => invoke<CredentialStatus>("login_endpoint", { id }),
-  logoutEndpoint: (id: string) => invoke<void>("logout_endpoint", { id }),
-  credentialStatus: (id: string) => invoke<CredentialStatus>("credential_status", { id }),
-  answerPrompt: (id: string, values: Record<string, string> | null) => invoke<void>("answer_prompt", { id, values }),
+  processStatus: (id: string) => invoke<ProcessStatus | null>("process_status", { id }),
+  restartProcess: (id: string) => invoke<void>("restart_process", { id }),
 
   testEndpoint: (id: string, model?: string) => invoke<TestResult>("test_endpoint", { id, model: model ?? null }),
   testProxy: (id: string) => invoke<TestResult>("test_proxy", { id }),
@@ -365,6 +342,9 @@ export const api = {
   listClients: () => invoke<ClientInfo[]>("list_clients"),
   applyClient: (client: string, options: ApplyOptions) => invoke<void>("apply_client", { client, options }),
   restoreClient: (client: string) => invoke<void>("restore_client", { client }),
+  /** 生成 Claude 桌面版可导入的配置文件，返回文件路径 */
+  exportDesktopConfig: (models: DesktopModel[]) => invoke<string>("export_desktop_config", { models }),
+  desktopConnected: () => invoke<boolean>("desktop_connected"),
 
   getAutostart: () => invoke<boolean>("get_autostart"),
   setAutostart: (enabled: boolean) => invoke<void>("set_autostart", { enabled }),
@@ -391,8 +371,7 @@ export function newEndpoint(): EndpointConfig {
     baseUrl: "",
     auth: "auto",
     proxy: "system",
-    plugin: "",
-    pluginSettings: {},
+    process: { enabled: false, command: "", workdir: "" },
     headers: {},
     timeoutSecs: 300,
     compat: { sendReasoningContent: false, useMaxCompletionTokens: false, sendReasoningEffort: false, dropSamplingParams: false },

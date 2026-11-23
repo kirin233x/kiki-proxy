@@ -10,12 +10,12 @@
 - **4 种协议互相转换**：Anthropic Messages、OpenAI Chat Completions、OpenAI Responses、Gemini。Claude Code 可以用 DeepSeek，Codex 可以用 Claude，Gemini CLI 可以用内部服务。流式输出、工具调用、思考过程、图片都会正确转换。
 - **每个端点走不同的线路**：直连、跟随系统代理、HTTP 代理、SOCKS5 代理，可以按端点设置，也可以按规则覆盖。
 - **可配置的故障切换**：每个端点（或每个模型）可以设置「出错时依次改用哪些模型」；触发条件（连接失败、超时、5xx、429、其他状态码）也可以配置。只在上游还没开始返回内容时切换，不会把输出了一半的回答重来一遍。
-- **插件 = 一种端点类型**：比如「公司内部服务」，和 Anthropic、OpenAI 并列可选。插件声明内部服务说的标准格式（比如 OpenAI Chat），协议转换由框架完成；插件只写登录（网页登录、账号密码、动态 token）、续期和内部格式的小差异。App 启动时自动登录、到期前后台续期、401 后自动重新登录并重试。
+- **本地程序**：公司内部服务如果已经有命令行代理（负责登录、续期、格式转换，比如 cc-proxy），在端点里填上它的启动命令即可。kiki-proxy 会在启动时把它拉起来、挂了自动重启、退出时一起结束，并在界面上显示它的运行状态和输出日志；网关把这个端点的请求转给它监听的地址。
 - **请求日志**：每个请求的客户端原始请求、发给上游的请求、上游原始响应、返回客户端的响应都能看到（密钥自动打码），可以一键复制成 curl 重放。完整内容默认保留 24 小时。
 - **用量统计**：按模型、按端点统计请求数、token、费用、耗时、失败率。
 - **一键获取模型和价格**：从上游的 `/models` 接口拉取模型列表，勾选添加；价格、上下文窗口、是否支持图片从 [LiteLLM 公开价格表](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) 自动填写（内部模型查不到的手动填）。
 - **上下文窗口**：每个模型可以标注上下文大小。≥ 1M 的模型在 Claude Code 的 `/model` 里带 `[1m]` 后缀；其他模型通过 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 告诉 Claude Code 何时压缩上下文（Claude Code 对不认识的模型名默认按 1M 处理）。上游返回「上下文超长」时，网关会改写成 Claude Code 认识的错误，让它自动压缩后重试。
-- **一键接入客户端**：自动修改 Claude Code / Codex / Gemini CLI 的配置文件（修改前自动备份，可一键恢复）。
+- **一键接入客户端**：自动修改 Claude Code / Codex / Gemini CLI 的配置文件（修改前自动备份，可一键恢复）；Claude Code 桌面版可以生成配置文件，在桌面版里导入即可。
 
 ## 路由规则
 
@@ -68,15 +68,26 @@ npm run tauri dev
 npm run dev
 ```
 
-跑网关引擎的测试（16 种协议组合、故障切换、插件重新登录等）：
+跑网关引擎的测试（16 种协议组合、故障切换、本地程序托管等）：
 
 ```bash
 npm run test:core
 ```
 
-## 写插件
+## 接入公司内部服务（命令行代理）
 
-见 [docs/PLUGINS.md](docs/PLUGINS.md)。让 AI 编码助手（本地模型等）来适配的话，让它先读 [src-tauri/core/src/plugins/README.md](src-tauri/core/src/plugins/README.md)，里面有完整的步骤、信息清单、接口说明和测试模板。简单来说：复制 `src-tauri/core/src/plugins/example.rs`（OpenAI Chat 格式 + 网页登录 + 自动续期），改成你们的逻辑，在 `plugins/mod.rs` 里注册一行，重新构建 App。
+如果你已经有一个命令行代理（启动后负责网页登录、token 续期、把 Anthropic 格式转换成内部格式，并在本机监听一个端口）：
+
+1. 添加端点，选预设「本地命令行服务」。
+2. 协议选这个代理**对外提供**的格式（比如它接收 Anthropic 格式，就选 Anthropic），地址填它监听的地址，比如 `http://127.0.0.1:8787`。
+3. 打开「由 kiki-proxy 启动这个端点背后的程序」，填启动命令，和在终端里敲的一样（通过登录 shell 执行，能用到终端里的 PATH）。
+4. 添加内部模型，保存。之后在 Claude Code 的 `/model` 里选「端点前缀/模型名」就会走这个代理。
+
+程序的运行状态、输出日志、重启按钮都在端点编辑页里；端点列表和概览页会显示它是否在运行。
+
+## Claude Code 桌面版
+
+桌面版不读 `~/.claude/settings.json`，需要用它自己的「第三方推理」配置。在「客户端接入」页选好要放进桌面版的模型，点「生成配置文件」，然后在桌面版里：Help → Troubleshooting → Enable Developer Mode；Developer → Configure Third-Party Inference… → Import configuration…，选择生成的文件，Apply Changes 后 Relaunch。也可以按页面上列出的值手动填写。
 
 ## 项目结构
 
@@ -87,13 +98,12 @@ src-tauri/core/          网关引擎（纯 Rust，不依赖 Tauri，可以单�
   src/router.rs          模型名 → 端点的路由、故障切换链
   src/gateway.rs         本地 HTTP 服务与请求处理主流程
   src/upstream.rs        出口代理、上游地址拼接
-  src/plugin.rs          插件接口与宿主能力
-  src/auth.rs            插件凭证的缓存、刷新、重新登录
-  src/plugins/           ← 你的插件写在这里
+  src/process.rs         本地程序托管（启动、日志、自动重启）
+  src/pricing.rs         模型价格表（LiteLLM）
   src/store.rs           请求日志与用量统计（SQLite）
-  src/clients.rs         一键配置 Claude Code / Codex / Gemini CLI
+  src/clients.rs         一键配置 Claude Code / Codex / Gemini CLI，生成桌面版配置文件
   tests/                 端到端测试、真实报文测试
-src-tauri/src/lib.rs     Tauri 外壳：钥匙串、插件弹窗、菜单栏、前端命令
+src-tauri/src/lib.rs     Tauri 外壳：钥匙串、菜单栏、前端命令
 src/                     界面（React）
 design/                  图标与视觉风格说明
 ```
@@ -101,7 +111,7 @@ design/                  图标与视觉风格说明
 ## 数据存在哪里
 
 - 配置：`~/Library/Application Support/com.kirin233x.kiki-proxy/config.toml`（可读的 TOML，可以在设置里导出导入）
-- API Key、代理密码、插件凭证：macOS 钥匙串（服务名 `kiki-proxy`），不会写进配置文件
+- API Key、代理密码：macOS 钥匙串（服务名 `kiki-proxy`），不会写进配置文件
 - 请求日志：同目录下的 `logs.db`
 
 所有数据都只在本机，网关只监听 `127.0.0.1`。

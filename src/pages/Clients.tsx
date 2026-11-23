@@ -1,18 +1,14 @@
-import { useEffect, useState } from "react";
-import { CheckCircle2, Monitor, RotateCcw, TerminalSquare, Wrench } from "lucide-react";
-import { api, ApplyOptions, ClientInfo, fmtContext } from "../api";
+import { ReactNode, useEffect, useMemo, useState } from "react";
+import { Check, Download, FileJson, RotateCcw } from "lucide-react";
+import { api, ApplyOptions, ClientInfo, DesktopModel, fmtContext } from "../api";
 import { useApp } from "../App";
 import ModelInput from "../components/ModelInput";
-import { CopyButton, Field, Switch, useToast } from "../components/ui";
+import { CopyButton, Switch, useToast } from "../components/ui";
 
-const DESC: Record<ClientInfo["id"], string> = {
-  claude: "写入 env：ANTHROPIC_BASE_URL、ANTHROPIC_AUTH_TOKEN，以及模型设置",
-  codex: "添加 model_providers.kiki（Responses 协议），并设为默认 provider",
-  gemini: "写入 GOOGLE_GEMINI_BASE_URL、GEMINI_API_KEY，并切换到 API Key 登录方式",
-};
+const CTX_OPTIONS = [32_768, 65_536, 131_072, 200_000, 262_144, 400_000];
 
 export default function Clients() {
-  const { config, baseUrl, saveConfig } = useApp();
+  const { config, baseUrl, saveConfig, models } = useApp();
   const toast = useToast();
   const [clients, setClients] = useState<ClientInfo[]>([]);
   const [opts, setOpts] = useState<Record<string, ApplyOptions>>({});
@@ -21,8 +17,7 @@ export default function Clients() {
     refresh();
   }, []);
 
-  // Claude Code 对不认识的模型名默认按 1M 上下文；没有 [1m] 的模型用这个值压缩上下文。建议取非 1M 模型里最小的窗口
-  const { models } = useApp();
+  // Claude Code 对不认识的模型名默认按 1M 上下文；不带 [1m] 的模型按这个值压缩上下文。建议取非 1M 模型里最小的窗口
   const smallWindows = models.map((m) => m.contextWindow).filter((c) => c > 0 && c < 1_000_000);
   const suggestedCtx = smallWindows.length ? Math.min(...smallWindows) : 0;
   const o = (id: string): ApplyOptions => {
@@ -30,11 +25,12 @@ export default function Clients() {
     return opts[id] ?? { model: c?.model ?? "", smallModel: "", discovery: true, maxContextTokens: c?.maxContextTokens || (id === "claude" ? suggestedCtx : 0) };
   };
   const setO = (id: string, patch: Partial<ApplyOptions>) => setOpts({ ...opts, [id]: { ...o(id), ...patch } });
+  const client = (id: ClientInfo["id"]) => clients.find((c) => c.id === id);
 
   const apply = async (c: ClientInfo) => {
     try {
       await api.applyClient(c.id, o(c.id));
-      toast(`已配置 ${c.name}，重新打开 ${c.name} 后生效`);
+      toast(`已写入 ${c.name} 的配置，重新打开 ${c.name} 后生效`);
       refresh();
     } catch (e) {
       toast(String(e), true);
@@ -51,169 +47,341 @@ export default function Clients() {
   };
 
   const key = config.server.accessKey || "kiki-proxy";
-  const snippets = [
-    { name: "Anthropic 协议", hint: "Claude Code、dsh（Anthropic 模式）等", url: baseUrl, path: "/v1/messages" },
-    { name: "OpenAI 协议", hint: "Chat Completions 与 Responses，dsh（OpenAI 模式）、Cursor、Cherry Studio 等", url: `${baseUrl}/v1`, path: "/chat/completions · /responses" },
-    { name: "Gemini 协议", hint: "Gemini CLI 等", url: baseUrl, path: "/v1beta/models/{模型}:generateContent" },
-  ];
+  const claude = client("claude");
+  const codex = client("codex");
+  const gemini = client("gemini");
 
   return (
     <div className="page">
-      <div className="page-inner" style={{ maxWidth: 940 }}>
+      <div className="page-inner" style={{ maxWidth: 960 }}>
         <div className="page-header">
           <div>
             <h1 className="page-title">客户端接入</h1>
-            <div className="page-subtitle">客户端始终连本机网关，切换端点不需要再改客户端配置</div>
+            <div className="page-subtitle">所有客户端都只连本机网关；以后切换模型或端点，不用再改客户端</div>
           </div>
         </div>
 
-        <div className="client-list">
-          {clients.map((c) => (
-            <div key={c.id} className="panel panel-pad client-card">
-              <div className="client-head">
-                <div className="client-icon">
-                  <TerminalSquare size={20} />
-                </div>
-                <div className="client-title">
-                  <b>
-                    {c.name}
-                    {c.connected && (
-                      <span className="connected">
-                        <CheckCircle2 size={13} />
-                        已接入
-                      </span>
-                    )}
-                  </b>
-                  <span>{DESC[c.id]}</span>
-                  <code className="mono-sm">{c.path}</code>
-                </div>
-                <div className="client-actions">
-                  {c.hasBackup && (
-                    <button className="btn btn-sm btn-ghost" onClick={() => restore(c)} title="恢复成接入前的配置文件">
-                      <RotateCcw size={14} />
-                      恢复原配置
-                    </button>
-                  )}
-                  <button className="btn btn-sm btn-primary" onClick={() => apply(c)}>
-                    {c.connected ? "更新配置" : "一键接入"}
-                  </button>
-                </div>
-              </div>
-              <div className="client-opts">
-                <Field label="默认模型" help={c.id === "claude" ? "留空则使用 Claude Code 自己的默认模型（会经过路由规则 / 默认模型）" : undefined}>
-                  <ModelInput value={o(c.id).model} onChange={(v) => setO(c.id, { model: v })} placeholder="例如 internal/sonnet" />
-                </Field>
-                {c.id === "claude" && (
+        <div className="conn-strip">
+          <div>
+            <span>网关地址</span>
+            <code>{baseUrl}</code>
+            <CopyButton text={baseUrl} small />
+          </div>
+          <div>
+            <span>API Key</span>
+            <code>{key}</code>
+            <CopyButton text={key} small />
+            {!config.server.accessKey && <em>未设置访问密钥，填任意值都可以</em>}
+          </div>
+        </div>
+
+        {/* ---------------------------------------------------------------- Claude Code */}
+        {claude && (
+          <ClientCard
+            glyph="C"
+            color="#d97757"
+            title="Claude Code"
+            sub="命令行版 · 写入 ~/.claude/settings.json"
+            info={claude}
+            onApply={() => apply(claude)}
+            onRestore={() => restore(claude)}
+          >
+            <div className="cc-grid">
+              <Row label="默认模型" help="留空则用 Claude Code 自己的默认模型（按路由规则或兜底模型转发）">
+                <ModelInput value={o("claude").model} onChange={(v) => setO("claude", { model: v })} placeholder="例如 internal/sonnet" />
+              </Row>
+              <Row label="后台小任务模型" help="生成标题、摘要等用的 haiku 模型">
+                <ModelInput value={o("claude").smallModel} onChange={(v) => setO("claude", { smallModel: v })} placeholder="例如 ds/deepseek-chat" />
+              </Row>
+              <Row
+                label="非 1M 模型的上下文窗口"
+                help={
                   <>
-                    <Field label="后台小任务模型" help="Claude Code 生成标题、摘要等用的 haiku 模型">
-                      <ModelInput value={o(c.id).smallModel} onChange={(v) => setO(c.id, { smallModel: v })} placeholder="例如 ds/deepseek-chat" />
-                    </Field>
-                    <Field
-                      label="非 1M 模型的上下文窗口"
-                      help={
-                        <>
-                          写入 CLAUDE_CODE_MAX_CONTEXT_TOKENS。Claude Code 对网关里的模型名默认按 1M 上下文使用，不设置的话 128K 的模型会一直塞到报错；
-                          标了 1M 的模型带 [1m] 后缀，不受这个值影响。{suggestedCtx > 0 && `建议：${fmtContext(suggestedCtx)}（已启用模型里最小的窗口）`}
-                        </>
-                      }
-                    >
-                      <select className="select" value={o(c.id).maxContextTokens} onChange={(e) => setO(c.id, { maxContextTokens: Number(e.target.value) })}>
-                        <option value={0}>不设置</option>
-                        {[...new Set([32_768, 65_536, 131_072, 200_000, 262_144, 400_000, ...(suggestedCtx ? [suggestedCtx] : []), ...(o(c.id).maxContextTokens ? [o(c.id).maxContextTokens] : [])])]
-                          .sort((a, b) => a - b)
-                          .map((v) => (
-                            <option key={v} value={v}>
-                              {fmtContext(v)}
-                              {v === suggestedCtx ? "（建议）" : ""}
-                            </option>
-                          ))}
-                      </select>
-                    </Field>
-                    <div className="setting-inline" style={{ alignSelf: "center" }}>
-                      <Switch on={o(c.id).discovery} onChange={(v) => setO(c.id, { discovery: v })} />
-                      <div>
-                        <b>在 /model 里列出网关的所有模型</b>
-                        <span>设置 CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1，Claude Code 会从网关拉取模型列表</span>
-                      </div>
-                    </div>
-                    <div className="setting-inline span-2" style={{ marginTop: 8 }}>
-                      <Switch
-                        on={config.routing.claudeAlias}
-                        onChange={(v) => saveConfig({ ...config, routing: { ...config.routing, claudeAlias: v } }).catch(() => {})}
-                      />
-                      <div>
-                        <b>列表里也显示非 Claude 模型</b>
-                        <span>Claude Code 只显示名字含 claude 的模型；开启后其他模型显示为 claude@前缀/模型，网关会自动去掉这个前缀（立即生效，不用重新接入）</span>
-                      </div>
-                    </div>
+                    Claude Code 默认把网关里的模型当成 1M 上下文；设置后，不带 [1m] 的模型会按这个大小压缩上下文。
+                    {suggestedCtx > 0 && ` 建议 ${fmtContext(suggestedCtx)}（已启用模型里最小的窗口）`}
                   </>
-                )}
-                {c.id === "codex" && config.server.accessKey && (
-                  <div className="span-2 muted-sm">设置了访问密钥：请在 shell 里 export KIKI_PROXY_KEY={config.server.accessKey}</div>
-                )}
-              </div>
+                }
+              >
+                <select className="select" value={o("claude").maxContextTokens} onChange={(e) => setO("claude", { maxContextTokens: Number(e.target.value) })}>
+                  <option value={0}>不设置</option>
+                  {[...new Set([...CTX_OPTIONS, ...(suggestedCtx ? [suggestedCtx] : []), ...(o("claude").maxContextTokens ? [o("claude").maxContextTokens] : [])])]
+                    .sort((a, b) => a - b)
+                    .map((v) => (
+                      <option key={v} value={v}>
+                        {fmtContext(v)}
+                        {v === suggestedCtx ? "（建议）" : ""}
+                      </option>
+                    ))}
+                </select>
+              </Row>
             </div>
-          ))}
+            <div className="cc-switches">
+              <SwitchRow
+                on={o("claude").discovery}
+                onChange={(v) => setO("claude", { discovery: v })}
+                title="/model 里列出网关的所有模型"
+                desc="写入 CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1"
+              />
+              <SwitchRow
+                on={config.routing.claudeAlias}
+                onChange={(v) => saveConfig({ ...config, routing: { ...config.routing, claudeAlias: v } }).catch(() => {})}
+                title="列表里也显示非 Claude 模型"
+                desc="名字不含 claude 的模型显示为 claude@前缀/模型，立即生效"
+              />
+            </div>
+          </ClientCard>
+        )}
+
+        {/* ---------------------------------------------------------------- Claude 桌面版 */}
+        <DesktopCard baseUrl={baseUrl} apiKey={key} />
+
+        {/* ---------------------------------------------------------------- Codex / Gemini */}
+        <div className="cc-pair">
+          {codex && (
+            <ClientCard glyph="X" color="#10a37f" title="Codex CLI" sub="写入 ~/.codex/config.toml" info={codex} onApply={() => apply(codex)} onRestore={() => restore(codex)} compact>
+              <Row label="默认模型">
+                <ModelInput value={o("codex").model} onChange={(v) => setO("codex", { model: v })} placeholder="例如 internal/sonnet" />
+              </Row>
+              {config.server.accessKey && <p className="muted-sm">设置了访问密钥：请在 shell 里 export KIKI_PROXY_KEY={config.server.accessKey}</p>}
+            </ClientCard>
+          )}
+          {gemini && (
+            <ClientCard glyph="G" color="#4f7cff" title="Gemini CLI" sub="写入 ~/.gemini/.env" info={gemini} onApply={() => apply(gemini)} onRestore={() => restore(gemini)} compact>
+              <Row label="默认模型">
+                <ModelInput value={o("gemini").model} onChange={(v) => setO("gemini", { model: v })} placeholder="例如 gm/gemini-2.5-pro" />
+              </Row>
+            </ClientCard>
+          )}
         </div>
 
-        <div className="settings-group" style={{ marginTop: 28 }}>
-          <h3>
-            <Monitor size={14} /> Claude Code 桌面版
-          </h3>
-          <div className="panel panel-pad desktop-steps">
-            <p>桌面版不读取 settings.json，需要在它的「第三方推理」设置里手动填写：</p>
-            <ol>
-              <li>菜单 Help → Troubleshooting → Enable Developer Mode</li>
-              <li>
-                Developer → Configure Third-Party Inference，网关地址填 <code>{baseUrl}</code> <CopyButton text={baseUrl} small />
-              </li>
-              <li>
-                密钥随便填（如 <code>{key}</code>）；如果在设置里配置了访问密钥，就填访问密钥
-              </li>
-            </ol>
-          </div>
-        </div>
-
-        <div className="settings-group">
-          <h3>
-            <Wrench size={14} /> 其他工具
-          </h3>
-          <div className="panel">
-            {snippets.map((s) => (
-              <div key={s.name} className="setting-row">
-                <div className="setting-text">
-                  <b>{s.name}</b>
-                  <span>
-                    {s.hint}
-                    <br />
-                    接口：<code>{s.path}</code>
-                  </span>
-                </div>
-                <div className="snippet">
-                  <code>{s.url}</code>
-                  <CopyButton text={s.url} small />
-                </div>
-              </div>
-            ))}
-            <div className="setting-row">
-              <div className="setting-text">
-                <b>API Key</b>
-                <span>{config.server.accessKey ? "设置里配置的访问密钥" : "没有设置访问密钥，填任意非空值即可"}</span>
-              </div>
-              <div className="snippet">
-                <code>{key}</code>
-                <CopyButton text={key} small />
-              </div>
-            </div>
-            <div className="setting-row">
-              <div className="setting-text">
-                <b>模型名</b>
-                <span>使用「端点前缀/模型名」，例如 {config.endpoints[0] ? `${config.endpoints[0].id}/${config.endpoints[0].models[0]?.name ?? "模型"}` : "ds/deepseek-chat"}</span>
-              </div>
+        {/* ---------------------------------------------------------------- 其他 */}
+        <div className="panel cc-card">
+          <div className="cc-head">
+            <span className="cc-glyph" style={{ background: "#646a80" }}>…</span>
+            <div className="cc-title">
+              <b>其他工具</b>
+              <span>Cursor、Cherry Studio、dsh 等，按工具支持的格式填下面的地址；模型名写「端点前缀/模型名」</span>
             </div>
           </div>
+          <table className="other-table">
+            <tbody>
+              {[
+                ["Anthropic 格式", baseUrl, "/v1/messages"],
+                ["OpenAI 格式", `${baseUrl}/v1`, "/chat/completions、/responses"],
+                ["Gemini 格式", baseUrl, "/v1beta/models/{模型}:generateContent"],
+              ].map(([name, url, path]) => (
+                <tr key={name}>
+                  <td>{name}</td>
+                  <td>
+                    <code>{url}</code>
+                    <CopyButton text={url} small />
+                  </td>
+                  <td className="muted-sm">{path}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
+  );
+}
+
+function ClientCard(props: {
+  glyph: string;
+  color: string;
+  title: string;
+  sub: string;
+  info?: ClientInfo;
+  connected?: boolean;
+  onApply?: () => void;
+  onRestore?: () => void;
+  applyText?: string;
+  compact?: boolean;
+  children: ReactNode;
+}) {
+  const connected = props.connected ?? props.info?.connected;
+  return (
+    <div className={`panel cc-card ${props.compact ? "compact" : ""}`}>
+      <div className="cc-head">
+        <span className="cc-glyph" style={{ background: props.color }}>
+          {props.glyph}
+        </span>
+        <div className="cc-title">
+          <b>
+            {props.title}
+            <span className={`pill ${connected ? "on" : ""}`}>{connected ? "已接入" : "未接入"}</span>
+          </b>
+          <span>{props.sub}</span>
+        </div>
+        <div className="cc-actions">
+          {props.info?.hasBackup && props.onRestore && (
+            <button className="btn btn-sm btn-ghost" onClick={props.onRestore} title="恢复成接入前的配置文件">
+              <RotateCcw size={14} />
+              恢复
+            </button>
+          )}
+          {props.onApply && (
+            <button className="btn btn-sm btn-primary" onClick={props.onApply}>
+              {props.applyText ?? (connected ? "更新配置" : "一键接入")}
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="cc-body">{props.children}</div>
+    </div>
+  );
+}
+
+function Row(props: { label: string; help?: ReactNode; children: ReactNode }) {
+  return (
+    <div className="cc-row">
+      <label>{props.label}</label>
+      <div>
+        {props.children}
+        {props.help && <p>{props.help}</p>}
+      </div>
+    </div>
+  );
+}
+
+function SwitchRow(props: { on: boolean; onChange: (v: boolean) => void; title: string; desc: string }) {
+  return (
+    <div className="cc-switch">
+      <Switch on={props.on} onChange={props.onChange} />
+      <div>
+        <b>{props.title}</b>
+        <span>{props.desc}</span>
+      </div>
+    </div>
+  );
+}
+
+/** Claude Code 桌面版：生成可导入的配置文件，或者手动填写 */
+function DesktopCard(props: { baseUrl: string; apiKey: string }) {
+  const { models } = useApp();
+  const toast = useToast();
+  const [connected, setConnected] = useState(false);
+  const [picked, setPicked] = useState<string[] | null>(null);
+  const [first, setFirst] = useState("");
+  const [file, setFile] = useState("");
+  useEffect(() => {
+    api.desktopConnected().then(setConnected);
+  }, []);
+  const list = picked ?? models.map((m) => m.id);
+  const ordered = useMemo(() => {
+    const def = first && list.includes(first) ? first : list[0];
+    return def ? [def, ...list.filter((x) => x !== def)] : [];
+  }, [list, first]);
+
+  const exportFile = async () => {
+    const payload: DesktopModel[] = ordered.map((id) => {
+      const m = models.find((x) => x.id === id)!;
+      return { name: id, label: m.displayName !== id ? m.displayName : "", supports1m: m.contextWindow >= 1_000_000 };
+    });
+    try {
+      setFile(await api.exportDesktopConfig(payload));
+      toast("配置文件已生成");
+    } catch (e) {
+      toast(String(e), true);
+    }
+  };
+
+  return (
+    <ClientCard glyph="D" color="#1b1f2e" title="Claude Code 桌面版" sub="桌面版不读 settings.json，用它自己的「第三方推理」配置" connected={connected}>
+      <div className="desk">
+        <div className="desk-models">
+          <div className="desk-label">
+            放进桌面版模型列表的模型
+            <span>第一个是默认模型</span>
+          </div>
+          <div className="desk-list">
+            {models.map((m) => {
+              const on = list.includes(m.id);
+              return (
+                <label key={m.id} className={on ? "on" : ""}>
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    onChange={() => setPicked(on ? list.filter((x) => x !== m.id) : [...list, m.id])}
+                  />
+                  <code>{m.id}</code>
+                  {m.contextWindow >= 1_000_000 && <span className="tag accent">1M</span>}
+                  {on && (
+                    <button className={`desk-def ${ordered[0] === m.id ? "is" : ""}`} onClick={(e) => (e.preventDefault(), setFirst(m.id))}>
+                      {ordered[0] === m.id ? "默认" : "设为默认"}
+                    </button>
+                  )}
+                </label>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="desk-steps">
+          <div className="desk-label">接入步骤</div>
+          <ol>
+            <li>
+              <button className="btn btn-sm btn-primary" onClick={exportFile} disabled={!ordered.length}>
+                <Download size={14} />
+                生成配置文件
+              </button>
+              {file && (
+                <span className="desk-file">
+                  <Check size={13} /> 已保存到 <code>{file}</code>
+                </span>
+              )}
+            </li>
+            <li>
+              打开桌面版：Help → Troubleshooting → <b>Enable Developer Mode</b>（只需一次）
+            </li>
+            <li>
+              Developer → <b>Configure Third-Party Inference…</b> → <b>Import configuration…</b>，选择刚生成的 <FileJson size={12} /> 文件
+            </li>
+            <li>
+              点 <b>Apply Changes</b>，再 <b>Relaunch</b>
+            </li>
+          </ol>
+          <details className="desk-manual">
+            <summary>不想导入文件？也可以在那个窗口里手动填</summary>
+            <table>
+              <tbody>
+                <tr>
+                  <td>Inference provider</td>
+                  <td>
+                    <code>Gateway</code>
+                  </td>
+                </tr>
+                <tr>
+                  <td>Gateway base URL</td>
+                  <td>
+                    <code>{props.baseUrl}</code> <CopyButton text={props.baseUrl} small />
+                  </td>
+                </tr>
+                <tr>
+                  <td>Gateway API key</td>
+                  <td>
+                    <code>{props.apiKey}</code> <CopyButton text={props.apiKey} small />
+                  </td>
+                </tr>
+                <tr>
+                  <td>Gateway auth scheme</td>
+                  <td>
+                    <code>Bearer</code>
+                  </td>
+                </tr>
+                <tr>
+                  <td>Model list</td>
+                  <td className="muted-sm">留空即可，桌面版会从网关拉取模型列表</td>
+                </tr>
+              </tbody>
+            </table>
+          </details>
+          <p className="muted-sm desk-note">
+            用了网关后，桌面版的云端环境和 Remote Control 不可用（官方限制）。官方文档没有说明是否允许 http://127.0.0.1 这样的本机地址，如果提示 Gateway was unreachable，请告诉我。
+          </p>
+        </div>
+      </div>
+    </ClientCard>
   );
 }

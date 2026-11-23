@@ -3,11 +3,12 @@ import { Copy, MoreHorizontal, Pencil, Plus, ScrollText, Server, Trash2, Zap } f
 import { api, EndpointConfig, fmtContext, protocolLabel, UsageRow } from "../api";
 import { useApp } from "../App";
 import TestDialog from "../components/TestDialog";
+import { ProcessBadge } from "../components/ProcessPanel";
 import { Confirm, Empty, Menu, Switch, useToast } from "../components/ui";
 import { fmtCost, fmtNum, protocolColor } from "../utils";
 
 export default function Endpoints() {
-  const { config, saveConfig, go, plugins } = useApp();
+  const { config, saveConfig, go } = useApp();
   const toast = useToast();
   const [menu, setMenu] = useState<{ el: HTMLElement; ep: EndpointConfig } | null>(null);
   const [del, setDel] = useState<EndpointConfig | null>(null);
@@ -56,9 +57,8 @@ export default function Endpoints() {
           <div className="ep-cards">
             {config.endpoints.map((e) => {
               const u = usage[e.id];
-              const plugin = plugins.find((p) => p.id === e.plugin);
-              const typeLabel = plugin ? plugin.name : protocolLabel(e.protocol);
-              const color = plugin ? "#6d5bff" : protocolColor[e.protocol];
+              const typeLabel = protocolLabel(e.protocol);
+              const color = protocolColor[e.protocol];
               return (
                 <div key={e.id} className={`ep2 panel ${e.enabled ? "" : "off"}`}>
                   <div className="ep2-head">
@@ -70,7 +70,15 @@ export default function Endpoints() {
                         {e.name}
                         <code className="prefix">{e.id}/</code>
                       </b>
-                      <span>{typeLabel}</span>
+                      <span>
+                        {typeLabel}
+                        {e.process.enabled && e.enabled && (
+                          <>
+                            {" · "}
+                            <ProcessBadge endpointId={e.id} />
+                          </>
+                        )}
+                      </span>
                     </div>
                     <Switch on={e.enabled} onChange={(v) => update(e.id, { enabled: v })} />
                   </div>
