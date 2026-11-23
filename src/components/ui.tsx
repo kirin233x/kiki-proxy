@@ -1,17 +1,38 @@
 import { createContext, ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { Check, Copy, X } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Check, Copy, Info, X } from "lucide-react";
+
+// ------------------------------------------------------------------ 悬停提示
+
+/** 小号「i」图标，悬停或聚焦时显示说明（渲染到 body，不会被卡片裁掉） */
+export function Hint(props: { children: ReactNode }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [at, setAt] = useState<DOMRect | null>(null);
+  const show = () => ref.current && setAt(ref.current.getBoundingClientRect());
+  const hide = () => setAt(null);
+  return (
+    <span ref={ref} className="hint" tabIndex={0} onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide}>
+      <Info size={13} />
+      {at &&
+        createPortal(
+          <span
+            className="hint-pop"
+            style={{
+              left: Math.max(12, Math.min(at.left + at.width / 2 - 150, window.innerWidth - 312)),
+              ...(at.top > 140 ? { bottom: window.innerHeight - at.top + 8 } : { top: at.bottom + 8 }),
+            }}
+          >
+            {props.children}
+          </span>,
+          document.body,
+        )}
+    </span>
+  );
+}
 
 // ------------------------------------------------------------------ Modal
 
-export function Modal(props: {
-  title: string;
-  icon?: ReactNode;
-  onClose: () => void;
-  children: ReactNode;
-  footer?: ReactNode;
-  wide?: boolean;
-  closable?: boolean;
-}) {
+export function Modal(props: { title: string; icon?: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; wide?: boolean; closable?: boolean }) {
   const { onClose, closable = true } = props;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -74,11 +95,7 @@ export const useToast = () => useContext(ToastCtx);
 
 // ------------------------------------------------------------------ Dropdown menu
 
-export function Menu(props: {
-  anchor: HTMLElement;
-  onClose: () => void;
-  items: ({ label: string; icon?: ReactNode; danger?: boolean; onClick: () => void } | "sep")[];
-}) {
+export function Menu(props: { anchor: HTMLElement; onClose: () => void; items: ({ label: string; icon?: ReactNode; danger?: boolean; onClick: () => void } | "sep")[] }) {
   const ref = useRef<HTMLDivElement>(null);
   const rect = props.anchor.getBoundingClientRect();
   const { onClose } = props;
@@ -120,14 +137,7 @@ export function Menu(props: {
 
 // ------------------------------------------------------------------ Confirm
 
-export function Confirm(props: {
-  title: string;
-  message: ReactNode;
-  confirmText?: string;
-  danger?: boolean;
-  onConfirm: () => void;
-  onClose: () => void;
-}) {
+export function Confirm(props: { title: string; message: ReactNode; confirmText?: string; danger?: boolean; onConfirm: () => void; onClose: () => void }) {
   return (
     <Modal
       title={props.title}
@@ -157,13 +167,7 @@ export function Confirm(props: {
 
 export function Switch(props: { on: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
   return (
-    <button
-      className={`switch ${props.on ? "on" : ""}`}
-      role="switch"
-      aria-checked={props.on}
-      disabled={props.disabled}
-      onClick={() => props.onChange(!props.on)}
-    />
+    <button className={`switch ${props.on ? "on" : ""}`} role="switch" aria-checked={props.on} disabled={props.disabled} onClick={() => props.onChange(!props.on)} />
   );
 }
 
@@ -203,13 +207,7 @@ export function CopyButton(props: { text: string; label?: string; small?: boolea
 }
 
 /** 只写不读的密钥输入框：显示「已设置」，输入新值才会覆盖 */
-export function SecretInput(props: {
-  isSet: boolean;
-  value: string;
-  onChange: (v: string) => void;
-  onClear?: () => void;
-  placeholder?: string;
-}) {
+export function SecretInput(props: { isSet: boolean; value: string; onChange: (v: string) => void; onClear?: () => void; placeholder?: string }) {
   return (
     <div className="secret-input">
       <input
@@ -217,7 +215,7 @@ export function SecretInput(props: {
         type="password"
         autoComplete="off"
         value={props.value}
-        placeholder={props.isSet ? "已保存在钥匙串中，输入新值可覆盖" : props.placeholder ?? "未设置"}
+        placeholder={props.isSet ? "已保存在钥匙串中，输入新值可覆盖" : (props.placeholder ?? "未设置")}
         onChange={(e) => props.onChange(e.target.value)}
       />
       {props.isSet && !props.value && <span className="secret-badge">已设置</span>}

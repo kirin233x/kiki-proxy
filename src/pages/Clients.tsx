@@ -4,7 +4,7 @@ import { api, ApplyOptions, ApplyReport, ClaudeInspection, ClientInfo, DesktopRo
 import { useApp } from "../App";
 import ModelInput from "../components/ModelInput";
 import { SortHandle, useSortable } from "../components/SortableList";
-import { CopyButton, Modal, Switch, useToast } from "../components/ui";
+import { CopyButton, Hint, Modal, Switch, useToast } from "../components/ui";
 
 const CTX_OPTIONS = [32_768, 65_536, 131_072, 200_000, 262_144, 400_000];
 
@@ -132,7 +132,7 @@ export default function Clients() {
         <div className="page-header">
           <div>
             <h1 className="page-title">客户端接入</h1>
-            <div className="page-subtitle">客户端统一连接本机网关，切换模型或端点无需修改客户端配置</div>
+            <div className="page-subtitle">所有客户端只连接本机网关</div>
           </div>
         </div>
 
@@ -146,7 +146,7 @@ export default function Clients() {
             <span>API Key</span>
             <code>{key}</code>
             <CopyButton text={key} small />
-            {!config.server.accessKey && <em>未启用访问密钥，可填写任意值</em>}
+            {!config.server.accessKey && <Hint>未启用访问密钥，客户端填写任意值即可</Hint>}
           </div>
         </div>
 
@@ -169,25 +169,25 @@ export default function Clients() {
               glyph="C"
               color="#d97757"
               title="Claude Code"
-              sub="命令行版 · 写入 ~/.claude/settings.json"
+              sub="~/.claude/settings.json"
               info={claude}
               onApply={() => apply(claude)}
               onRestore={() => restore(claude)}
             >
               <Section title="基本设置">
                 <div className="cc-grid">
-                  <Row label="默认模型" help="写入 ANTHROPIC_MODEL。留空时由路由规则或兜底模型决定">
+                  <Row label="默认模型" help="ANTHROPIC_MODEL。留空时由路由规则或兜底模型决定">
                     <ModelInput value={co.model} onChange={(v) => setO("claude", { model: v })} placeholder="例如 internal/sonnet" />
                   </Row>
-                  <Row label="Subagent 模型" help="写入 CLAUDE_CODE_SUBAGENT_MODEL，所有 subagent 统一使用该模型。留空时由 Claude Code 按 agent 定义选择">
+                  <Row label="Subagent 模型" help="CLAUDE_CODE_SUBAGENT_MODEL。所有 subagent 统一使用该模型；留空时按 agent 定义选择">
                     <ModelInput value={co.subagentModel} onChange={(v) => setO("claude", { subagentModel: v })} placeholder="按 agent 定义" />
                   </Row>
                   <Row
                     label="上下文上限"
                     help={
                       <>
-                        写入 CLAUDE_CODE_MAX_CONTEXT_TOKENS。未声明 1M 的模型按此值触发自动压缩。
-                        {suggestedCtx > 0 && `推荐 ${fmtContext(suggestedCtx)}（已启用模型中的最小窗口）。`}
+                        CLAUDE_CODE_MAX_CONTEXT_TOKENS。不支持 1M 的模型按此值自动压缩上下文。
+                        {suggestedCtx > 0 && `推荐 ${fmtContext(suggestedCtx)}，即已启用模型中的最小窗口。`}
                       </>
                     }
                   >
@@ -206,7 +206,7 @@ export default function Clients() {
                 </div>
               </Section>
 
-              <Section title="模型映射" desc="/model 中 Opus、Sonnet、Haiku 三个角色对应的网关模型。留空沿用默认模型；Haiku 同时用于标题生成等后台任务">
+              <Section title="模型映射" desc="/model 中三个角色对应的网关模型。留空沿用默认模型；Haiku 同时用于标题生成等后台任务">
                 <MapTable
                   cols="150px minmax(0,1fr) minmax(0,1.3fr) 72px"
                   head={["模型角色", "菜单显示名", "实际请求模型", "上下文"]}
@@ -239,17 +239,14 @@ export default function Clients() {
                   on={config.routing.claudeAlias}
                   onChange={(v) => saveConfig({ ...config, routing: { ...config.routing, claudeAlias: v } }).catch(() => {})}
                   title="显示非 Claude 模型"
-                  desc="以 claude@前缀/模型 的形式列出，即时生效"
+                  desc="名称不含 claude 的模型以 claude@前缀/模型 列出，即时生效"
                 />
               </div>
             </ClientCard>
 
             <div className="panel cc-card">
               <div className="cc-body">
-                <Section
-                  title="模型排序"
-                  desc="拖动调整网关模型列表的顺序，作用于 /model 的模型列表、桌面版模型发现和本应用的模型选择。修改即时保存，重启 Claude Code 后生效"
-                >
+                <Section title="模型排序" desc="拖动调整顺序，作用于 /model、桌面版模型发现和本应用的模型选择。即时保存，重启 Claude Code 后生效">
                   <MapTable
                     cols="minmax(0,1.4fr) minmax(0,1fr) minmax(0,0.8fr) 80px"
                     head={["模型", "显示名称", "端点", "上下文"]}
@@ -281,44 +278,26 @@ export default function Clients() {
 
         {/* ---------------------------------------------------------------- Codex / Gemini */}
         {tab === "codex" && codex && (
-          <ClientCard
-            glyph="X"
-            color="#10a37f"
-            title="Codex CLI"
-            sub="写入 ~/.codex/config.toml"
-            info={codex}
-            onApply={() => apply(codex)}
-            onRestore={() => restore(codex)}
-          >
+          <ClientCard glyph="X" color="#10a37f" title="Codex CLI" sub="~/.codex/config.toml" info={codex} onApply={() => apply(codex)} onRestore={() => restore(codex)}>
             <Section title="基本设置">
               <div className="cc-grid">
-                <Row
-                  label="默认模型"
-                  help={
-                    config.server.accessKey
-                      ? `已设置访问密钥，请在 shell 中设置环境变量 KIKI_PROXY_KEY=${config.server.accessKey}`
-                      : "写入 config.toml 的 model，可在 Codex 中通过 /model 切换"
-                  }
-                >
+                <Row label="默认模型" help="config.toml 中的 model，可在 Codex 中通过 /model 切换">
                   <ModelInput value={o("codex").model} onChange={(v) => setO("codex", { model: v })} placeholder="例如 internal/sonnet" />
+                  {config.server.accessKey && (
+                    <div className="inline-note">
+                      需在 shell 中设置 <code>KIKI_PROXY_KEY={config.server.accessKey}</code>
+                    </div>
+                  )}
                 </Row>
               </div>
             </Section>
           </ClientCard>
         )}
         {tab === "gemini" && gemini && (
-          <ClientCard
-            glyph="G"
-            color="#4f7cff"
-            title="Gemini CLI"
-            sub="写入 ~/.gemini/.env"
-            info={gemini}
-            onApply={() => apply(gemini)}
-            onRestore={() => restore(gemini)}
-          >
+          <ClientCard glyph="G" color="#4f7cff" title="Gemini CLI" sub="~/.gemini/.env" info={gemini} onApply={() => apply(gemini)} onRestore={() => restore(gemini)}>
             <Section title="基本设置">
               <div className="cc-grid">
-                <Row label="默认模型" help="写入 GEMINI_MODEL">
+                <Row label="默认模型" help="GEMINI_MODEL">
                   <ModelInput value={o("gemini").model} onChange={(v) => setO("gemini", { model: v })} placeholder="例如 gm/gemini-2.5-pro" />
                 </Row>
               </div>
@@ -335,7 +314,7 @@ export default function Clients() {
               </span>
               <div className="cc-title">
                 <b>其他工具</b>
-                <span>Cursor、Cherry Studio、dsh 等工具按所支持的协议填写以下地址，模型名使用「前缀/模型 ID」</span>
+                <span>按工具支持的协议填写地址，模型名为「前缀/模型 ID」</span>
               </div>
             </div>
             <table className="other-table">
@@ -457,15 +436,16 @@ function ClientCard(props: {
   );
 }
 
-/** 卡片里的一节：带标题和说明 */
-function Section(props: { title: string; desc?: ReactNode; children: ReactNode; action?: ReactNode }) {
+/** 卡片里的一节：标题 + 悬停说明 */
+function Section(props: { title: string; desc?: ReactNode; badge?: ReactNode; children: ReactNode; action?: ReactNode }) {
   return (
     <section className="cc-section">
       <div className="cc-section-head">
-        <div>
-          <h4>{props.title}</h4>
-          {props.desc && <p>{props.desc}</p>}
-        </div>
+        <h4>
+          {props.title}
+          {props.desc && <Hint>{props.desc}</Hint>}
+          {props.badge}
+        </h4>
         {props.action}
       </div>
       {props.children}
@@ -476,24 +456,24 @@ function Section(props: { title: string; desc?: ReactNode; children: ReactNode; 
 function Row(props: { label: string; help?: ReactNode; children: ReactNode }) {
   return (
     <div className="cc-row">
-      <label>{props.label}</label>
-      <div>
-        {props.children}
-        {props.help && <p>{props.help}</p>}
-      </div>
+      <label>
+        {props.label}
+        {props.help && <Hint>{props.help}</Hint>}
+      </label>
+      <div>{props.children}</div>
     </div>
   );
 }
 
 function SwitchRow(props: { on: boolean; onChange: (v: boolean) => void; title: string; desc: string }) {
   return (
-    <div className="cc-switch">
+    <label className="cc-switch">
+      <span>
+        {props.title}
+        <Hint>{props.desc}</Hint>
+      </span>
       <Switch on={props.on} onChange={props.onChange} />
-      <div>
-        <b>{props.title}</b>
-        <span>{props.desc}</span>
-      </div>
-    </div>
+    </label>
   );
 }
 
@@ -629,6 +609,7 @@ function DesktopCard(props: { baseUrl: string; apiKey: string; connected: boolea
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [file, setFile] = useState("");
+  const [manual, setManual] = useState(false);
   const saved = config?.desktop?.routes ?? [];
   // 顺序就是桌面版菜单的顺序，第一个是默认模型
   const [rows, setRows] = useState<DeskRow[]>([]);
@@ -683,7 +664,7 @@ function DesktopCard(props: { baseUrl: string; apiKey: string; connected: boolea
       glyph="D"
       color="#1b1f2e"
       title="Claude Code 桌面版"
-      sub="写入「第三方推理」配置库，重启桌面版后生效"
+      sub="第三方推理配置库"
       connected={props.connected}
       canRestore={props.connected}
       busy={busy || !routes.length}
@@ -693,12 +674,8 @@ function DesktopCard(props: { baseUrl: string; apiKey: string; connected: boolea
     >
       <Section
         title="模型映射"
-        desc={
-          <>
-            拖动调整菜单顺序，首项为默认模型。模型角色决定桌面版的请求参数（如思考强度），请求仍发送至实际请求模型。
-            {dirty && props.connected && <b className="desk-dirty"> 有尚未写入桌面版的修改。</b>}
-          </>
-        }
+        desc="拖动调整菜单顺序，首项为默认模型。桌面版仅接受 claude-sonnet-* 等模型 ID，模型角色决定请求参数（如思考强度），请求仍发送至实际请求模型"
+        badge={dirty && props.connected ? <span className="sync-badge">未同步</span> : null}
         action={
           <button className="btn btn-sm btn-soft" onClick={() => setRows([...rows, { key: newKey(), model: "", role: "sonnet", label: "" }])}>
             <Plus size={14} />
@@ -745,32 +722,53 @@ function DesktopCard(props: { baseUrl: string; apiKey: string; connected: boolea
         />
       </Section>
 
-      <Section title="接入步骤">
-        <ol className="desk-ol">
-          <li>
-            在桌面版中启用开发者模式：Help → Troubleshooting → <b>Enable Developer Mode</b>
-          </li>
-          <li>点击右上角「{props.connected ? "更新配置" : "一键接入"}」</li>
-          <li>完全退出（⌘Q）并重新打开桌面版</li>
-        </ol>
-        <details className="desk-manual">
-          <summary>手动导入配置文件</summary>
-          <p className="muted-sm">
-            生成配置文件后，在桌面版中依次选择 Developer → <b>Configure Third-Party Inference…</b> → <b>Import configuration…</b>，导入该 <FileJson size={12} />{" "}
-            文件，然后 Apply Changes 并 Relaunch。
-          </p>
+      <Section title="接入步骤" desc="启用网关后，桌面版的云端环境与 Remote Control 不可用">
+        <div className="dsteps">
+          <div className="dstep">
+            <em>1</em>
+            <span>开启开发者模式</span>
+            <Hint>
+              Help → Troubleshooting → <b>Enable Developer Mode</b>
+            </Hint>
+          </div>
+          <i className="dstep-line" />
+          <div className="dstep">
+            <em>2</em>
+            <span>{props.connected ? "更新配置" : "一键接入"}</span>
+          </div>
+          <i className="dstep-line" />
+          <div className="dstep">
+            <em>3</em>
+            <span>重启桌面版</span>
+            <Hint>⌘Q 完全退出后重新打开</Hint>
+          </div>
+          <button className="btn btn-xs btn-ghost dsteps-manual" onClick={() => setManual(true)}>
+            <FileJson size={13} />
+            手动导入
+          </button>
+        </div>
+      </Section>
+      {manual && (
+        <Modal title="手动导入配置" icon={<FileJson size={18} />} onClose={() => setManual(false)}>
+          <ol className="desk-ol">
+            <li>生成配置文件</li>
+            <li>
+              桌面版中选择 Developer → <b>Configure Third-Party Inference…</b> → <b>Import configuration…</b>
+            </li>
+            <li>导入后点击 Apply Changes 并 Relaunch</li>
+          </ol>
           <div className="desk-export">
-            <button className="btn btn-sm" onClick={() => run("export")} disabled={!routes.length || busy}>
+            <button className="btn btn-sm btn-primary" onClick={() => run("export")} disabled={!routes.length || busy}>
               <Download size={14} />
               生成配置文件
             </button>
             {file && (
               <span className="desk-file">
-                <Check size={13} /> 已保存到 <code>{file}</code>
+                <Check size={13} /> <code>{file}</code>
               </span>
             )}
           </div>
-          <table>
+          <table className="kv-table">
             <tbody>
               <tr>
                 <td>Gateway base URL</td>
@@ -786,12 +784,8 @@ function DesktopCard(props: { baseUrl: string; apiKey: string; connected: boolea
               </tr>
             </tbody>
           </table>
-        </details>
-        <p className="muted-sm desk-note">
-          桌面版仅接受 claude-sonnet-*、claude-opus-* 等模型 ID，kiki-proxy 会按模型角色分配，网关收到请求后映射回实际请求模型。启用网关后，桌面版的云端环境与 Remote
-          Control 不可用。
-        </p>
-      </Section>
+        </Modal>
+      )}
     </ClientCard>
   );
 }
@@ -820,13 +814,16 @@ function ClaudeCheck(props: { refreshKey: unknown }) {
   if (!r) return null;
   // 接入之后文件又被改了（比如 cc-switch 把它的配置写了回去）
   const touched = appliedAt > 0 && r.files.some((f) => f.modified > appliedAt + 1500);
+  if (!r.issues.length && !touched) return null;
   return (
     <div className={`cc-check ${r.issues.length ? "bad" : "ok"}`}>
       <div className="cc-check-head">
-        <b>{r.issues.length ? `配置检查：发现 ${r.issues.length} 个问题` : "配置检查：未发现问题"}</b>
-        <span>实时读取 {r.files.map((f) => f.path.replace(/^\/Users\/[^/]+/, "~")).join("、") || "（未找到配置文件）"}</span>
+        <b>
+          {r.issues.length ? `发现 ${r.issues.length} 个配置问题` : "配置文件已被修改"}
+          <Hint>实时读取 {r.files.map((f) => f.path.replace(/^\/Users\/[^/]+/, "~")).join("、") || "（未找到配置文件）"}</Hint>
+        </b>
       </div>
-      {touched && <div className="cc-check-warn">接入后配置文件被其他程序修改。若 cc-switch 等工具仍在运行，可能会覆盖当前配置，请退出后重新点击「更新配置」。</div>}
+      {touched && <div className="cc-check-warn">接入后被其他程序修改（如 cc-switch），请退出该程序后重新「更新配置」</div>}
       {r.issues.length > 0 && (
         <ul>
           {r.issues.map((i, k) => (
