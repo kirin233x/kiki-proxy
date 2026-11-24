@@ -408,3 +408,39 @@ async fn same_protocol_passthrough_is_untouched() {
     want["model"] = json!("claude-real");
     assert_eq!(sent, want);
 }
+
+/// 桌面版：走 /claude-desktop，按角色名路由；流式响应要把思考、正文、工具调用完整透传给客户端
+#[tokio::test]
+async fn desktop_stream_passthrough() {
+    let env = setup().await;
+    let mut cfg = env.gateway.config().as_ref().clone();
+    cfg.desktop.routes = vec![DesktopRoute { id: "claude-sonnet-5".into(), model: "an/claude".into(), label: String::new(), supports_1m: true }];
+    env.gateway.save_config(cfg).await.unwrap();
+    let body = json!({
+        "model": "claude-sonnet-5[1m]",
+        "max_tokens": 32000,
+        "stream": true,
+        "thinking": {"type": "adaptive"},
+        "messages": [{"role": "user", "content": "hi"}],
+    });
+    let r = reqwest::Client::new()
+        .post(format!("http://127.0.0.1:{}/claude-desktop/v1/messages", env.gw_port))
+        .header("anthropic-beta", "context-1m-2025-08-07")
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 200);
+    assert!(r.headers()["content-type"].to_str().unwrap().contains("text/event-stream"));
+    let text = r.text().await.unwrap();
+    // 客户端收到的事件：用 Anthropic 解码器读回来，内容要和上游给的一致
+    let got = decode(Protocol::Anthropic, true, &text);
+    assert_eq!(got.content, canned_response().content, "{text}");
+    for ev in ["message_start", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop"] {
+        assert!(text.contains(&format!("event: {ev}\n")), "缺少 {ev}：{text}");
+    }
+    // 上游收到的是网关里的真实模型
+    let seen = env.upstream.seen.lock().unwrap();
+    let sent: Value = serde_json::from_str(&seen.last().unwrap().1).unwrap();
+    assert_eq!(sent["model"], json!("claude-real"));
+}
